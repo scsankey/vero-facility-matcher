@@ -6,10 +6,7 @@ Upload → Clean → Match → Show Clusters → Download
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from io import BytesIO
-import sys
 
 # Import the VERO engine
 from vero_engine import run_vero_pipeline
@@ -40,19 +37,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 0.25rem;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,15 +63,6 @@ def validate_dataframe(df, required_cols, dataset_name):
         st.error(f"{dataset_name} is missing columns: {', '.join(missing_cols)}")
         return False
     return True
-
-def to_excel(dataframes_dict):
-    """Convert multiple dataframes to Excel with multiple sheets"""
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for sheet_name, df in dataframes_dict.items():
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-    output.seek(0)
-    return output
 
 # ============================================================================
 # SIDEBAR
@@ -135,11 +110,11 @@ with st.sidebar:
     st.info("""
     **VERO Entity Resolution**
     
-    This tool helps match facility records across different data sources to create a unified master registry.
+    Match facility records across data sources to create a unified master registry.
     
-    📊 Upload your data  
-    🤖 AI matches entities  
-    📁 Download golden records
+    📊 Upload data  
+    🤖 AI matching  
+    📁 Download results
     """)
 
 # ============================================================================
@@ -168,7 +143,7 @@ with col1:
     excel_file = st.file_uploader(
         "Upload Excel with multiple sheets",
         type=['xlsx', 'xls'],
-        help="Excel file should contain sheets: 'Government registry', 'NGO Dataset', 'WhatsApp Dataset', 'Sankey GTP' (optional ground truth)"
+        help="Excel file should contain sheets for Government, NGO, WhatsApp data"
     )
     
     if excel_file:
@@ -176,16 +151,19 @@ with col1:
             excel_sheets = pd.ExcelFile(excel_file).sheet_names
             st.success(f"✅ Found {len(excel_sheets)} sheets: {', '.join(excel_sheets)}")
             
-            # Sheet name mapping
             st.subheader("Sheet Name Mapping")
-            gov_sheet = st.selectbox("Government Registry Sheet", excel_sheets, index=excel_sheets.index('Government registry') if 'Government registry' in excel_sheets else 0)
-            ngo_sheet = st.selectbox("NGO Dataset Sheet", excel_sheets, index=excel_sheets.index('NGO Dataset') if 'NGO Dataset' in excel_sheets else 0)
-            wa_sheet = st.selectbox("WhatsApp Dataset Sheet", excel_sheets, index=excel_sheets.index('WhatsApp Dataset') if 'WhatsApp Dataset' in excel_sheets else 0)
+            gov_sheet = st.selectbox("Government Registry Sheet", excel_sheets, 
+                                    index=excel_sheets.index('Government registry') if 'Government registry' in excel_sheets else 0)
+            ngo_sheet = st.selectbox("NGO Dataset Sheet", excel_sheets,
+                                    index=excel_sheets.index('NGO Dataset') if 'NGO Dataset' in excel_sheets else 0)
+            wa_sheet = st.selectbox("WhatsApp Dataset Sheet", excel_sheets,
+                                   index=excel_sheets.index('WhatsApp Dataset') if 'WhatsApp Dataset' in excel_sheets else 0)
             
             has_ground_truth = st.checkbox("Include Ground Truth for Training")
             gt_sheet = None
             if has_ground_truth:
-                gt_sheet = st.selectbox("Ground Truth Sheet", excel_sheets, index=excel_sheets.index('Sankey GTP') if 'Sankey GTP' in excel_sheets else 0)
+                gt_sheet = st.selectbox("Ground Truth Sheet", excel_sheets,
+                                       index=excel_sheets.index('Sankey GTP') if 'Sankey GTP' in excel_sheets else 0)
             
         except Exception as e:
             st.error(f"Error reading Excel file: {str(e)}")
@@ -291,9 +269,7 @@ if st.session_state.results:
     st.markdown("---")
     st.header("📈 Step 4: Results & Clustering Overview")
     
-    # ---------------------------------------------------------------------
-    # 4.1 Summary metrics
-    # ---------------------------------------------------------------------
+    # Summary metrics
     gov_count = st.session_state.get("gov_count", 0)
     ngo_count = st.session_state.get("ngo_count", 0)
     wa_count  = st.session_state.get("wa_count", 0)
@@ -316,13 +292,10 @@ if st.session_state.results:
     with col4:
         st.metric("Clusters Found", total_clusters)
     
-    # ---------------------------------------------------------------------
-    # 4.2 Golden facilities table (Table 1)
-    # ---------------------------------------------------------------------
+    # Golden facilities table
     st.markdown("### 🏥 Table 1 – Golden Facilities")
     
     if len(golden_df) > 0:
-        # Pick only key columns if they exist
         display_cols = []
         for c in ["GoldenID", "OfficialName", "District", "Sources", "RecordCount"]:
             if c in golden_df.columns:
@@ -337,16 +310,12 @@ if st.session_state.results:
     else:
         st.info("No golden records generated yet. Check your VERO pipeline output.")
     
-    # ---------------------------------------------------------------------
-    # 4.3 One sample cluster expanded (Table 2)
-    # ---------------------------------------------------------------------
+    # Sample cluster expanded
     st.markdown("### 🧬 Table 2 – Sample Cluster (How Clustering Works)")
     
     if len(clusters_df) > 0 and "ClusterID" in clusters_df.columns:
-        # Let user pick a cluster to inspect
         cluster_ids = clusters_df["ClusterID"].unique()
         
-        # Simple heuristic: preselect the largest cluster
         cluster_sizes = clusters_df.groupby("ClusterID").size().sort_values(ascending=False)
         default_cluster = cluster_sizes.index[0]
         
@@ -358,10 +327,8 @@ if st.session_state.results:
         
         sample_cluster = clusters_df[clusters_df["ClusterID"] == selected_cluster].copy()
         
-        st.write(f"Showing all records in **{selected_cluster}** "
-                 f"({len(sample_cluster)} records):")
+        st.write(f"Showing all records in **{selected_cluster}** ({len(sample_cluster)} records):")
         
-        # Try to show intuitive columns
         sample_cols = []
         for c in ["RecordID", "Source", "Name", "AltName", "District", "Phone"]:
             if c in sample_cluster.columns:
@@ -372,14 +339,11 @@ if st.session_state.results:
         else:
             st.dataframe(sample_cluster, use_container_width=True)
         
-        st.caption("Each row above is an original record from Gov/NGO/WhatsApp that VERO "
-                   "decided belongs to the same real-world facility.")
+        st.caption("Each row is an original record from Gov/NGO/WhatsApp that VERO decided belongs to the same facility.")
     else:
-        st.info("No cluster data available to display. Make sure your pipeline returns a 'clusters' DataFrame.")
+        st.info("No cluster data available. Make sure your pipeline returns a 'clusters' DataFrame.")
     
-    # ---------------------------------------------------------------------
-    # 4.4 Download buttons
-    # ---------------------------------------------------------------------
+    # Download buttons
     st.markdown("### 📥 Step 5: Download Results")
     
     col1, col2, col3 = st.columns(3)
@@ -398,7 +362,7 @@ if st.session_state.results:
             st.caption("No golden records to download.")
     
     with col2:
-        st.markdown("**Master Entity Table (Clusters) (CSV)**")
+        st.markdown("**Master Entity Table (CSV)**")
         if len(clusters_df) > 0:
             st.download_button(
                 "⬇️ Download Master Entity Table",
@@ -423,34 +387,11 @@ if st.session_state.results:
         else:
             st.caption("No matched pairs to download.")
 
-# ============================================================================
-# FOOTER
-# ============================================================================
-
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
     <p><strong>VERO - Entity Resolution Platform</strong></p>
-    <p>Powered by AI | Built with Streamlit | © 2025</p>
+    <p>Powered by AI | © 2025</p>
 </div>
 """, unsafe_allow_html=True)
-```
-
----
-
-## 📄 **File 2: vero_engine.py** (No changes - already correct)
-
-The vero_engine.py from the previous artifact is still correct and doesn't need any updates. It already returns the proper structure with `GoldenID`, `OfficialName`, `Sources`, `RecordCount`, etc.
-
----
-
-## 📄 **File 3: requirements.txt** (No changes)
-```
-pandas
-openpyxl
-plotly
-sentence-transformers
-rapidfuzz
-scikit-learn
-networkx
-torch

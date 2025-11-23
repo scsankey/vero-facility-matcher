@@ -6,7 +6,10 @@ Upload → Clean → Match → Show Clusters → Download
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from io import BytesIO
+import sys
 
 # Import the VERO engine
 from vero_engine import run_vero_pipeline
@@ -37,6 +40,19 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .success-box {
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
+        border-radius: 0.25rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,6 +79,15 @@ def validate_dataframe(df, required_cols, dataset_name):
         st.error(f"{dataset_name} is missing columns: {', '.join(missing_cols)}")
         return False
     return True
+
+def to_excel(dataframes_dict):
+    """Convert multiple dataframes to Excel with multiple sheets"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name, df in dataframes_dict.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output
 
 # ============================================================================
 # SIDEBAR
@@ -110,11 +135,11 @@ with st.sidebar:
     st.info("""
     **VERO Entity Resolution**
     
-    Match facility records across data sources to create a unified master registry.
+    This tool helps match facility records across different data sources to create a unified master registry.
     
-    📊 Upload data  
-    🤖 AI matching  
-    📁 Download results
+    📊 Upload your data  
+    🤖 AI matches entities  
+    📁 Download golden records
     """)
 
 # ============================================================================
@@ -143,7 +168,7 @@ with col1:
     excel_file = st.file_uploader(
         "Upload Excel with multiple sheets",
         type=['xlsx', 'xls'],
-        help="Excel file should contain sheets for Government, NGO, WhatsApp data"
+        help="Excel file should contain sheets: 'Government registry', 'NGO Dataset', 'WhatsApp Dataset', 'Sankey GTP' (optional ground truth)"
     )
     
     if excel_file:
@@ -151,19 +176,16 @@ with col1:
             excel_sheets = pd.ExcelFile(excel_file).sheet_names
             st.success(f"✅ Found {len(excel_sheets)} sheets: {', '.join(excel_sheets)}")
             
+            # Sheet name mapping
             st.subheader("Sheet Name Mapping")
-            gov_sheet = st.selectbox("Government Registry Sheet", excel_sheets, 
-                                    index=excel_sheets.index('Government registry') if 'Government registry' in excel_sheets else 0)
-            ngo_sheet = st.selectbox("NGO Dataset Sheet", excel_sheets,
-                                    index=excel_sheets.index('NGO Dataset') if 'NGO Dataset' in excel_sheets else 0)
-            wa_sheet = st.selectbox("WhatsApp Dataset Sheet", excel_sheets,
-                                   index=excel_sheets.index('WhatsApp Dataset') if 'WhatsApp Dataset' in excel_sheets else 0)
+            gov_sheet = st.selectbox("Government Registry Sheet", excel_sheets, index=excel_sheets.index('Government registry') if 'Government registry' in excel_sheets else 0)
+            ngo_sheet = st.selectbox("NGO Dataset Sheet", excel_sheets, index=excel_sheets.index('NGO Dataset') if 'NGO Dataset' in excel_sheets else 0)
+            wa_sheet = st.selectbox("WhatsApp Dataset Sheet", excel_sheets, index=excel_sheets.index('WhatsApp Dataset') if 'WhatsApp Dataset' in excel_sheets else 0)
             
             has_ground_truth = st.checkbox("Include Ground Truth for Training")
             gt_sheet = None
             if has_ground_truth:
-                gt_sheet = st.selectbox("Ground Truth Sheet", excel_sheets,
-                                       index=excel_sheets.index('Sankey GTP') if 'Sankey GTP' in excel_sheets else 0)
+                gt_sheet = st.selectbox("Ground Truth Sheet", excel_sheets, index=excel_sheets.index('Sankey GTP') if 'Sankey GTP' in excel_sheets else 0)
             
         except Exception as e:
             st.error(f"Error reading Excel file: {str(e)}")
@@ -232,11 +254,6 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
             st.metric("WhatsApp Records", len(wa_df))
         
         if st.button("🎯 Start Matching", type="primary", use_container_width=True):
-            # Store record counts for summary view later
-            st.session_state.gov_count = len(gov_df)
-            st.session_state.ngo_count = len(ngo_df)
-            st.session_state.wa_count = len(wa_df)
-            
             st.session_state.processing = True
             
             with st.spinner("Running VERO matching pipeline..."):
@@ -267,131 +284,138 @@ if st.session_state.results:
     results = st.session_state.results
     
     st.markdown("---")
-    st.header("📈 Step 4: Results & Clustering Overview")
+    st.header("📈 Step 4: Results & Insights")
     
-    # Summary metrics
-    gov_count = st.session_state.get("gov_count", 0)
-    ngo_count = st.session_state.get("ngo_count", 0)
-    wa_count  = st.session_state.get("wa_count", 0)
-    
-    clusters_df = results.get("clusters", pd.DataFrame())
-    golden_df   = results.get("golden", pd.DataFrame())
-    matched_df  = results.get("matched_pairs", pd.DataFrame())
-    metrics     = results.get("metrics", {})
-    
-    total_clusters = clusters_df["ClusterID"].nunique() if "ClusterID" in clusters_df.columns and len(clusters_df) > 0 else 0
-    
-    st.subheader("🔢 Summary")
+    # Metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Gov Records", gov_count)
+        st.metric("Golden Records", len(results['golden']))
     with col2:
-        st.metric("NGO Records", ngo_count)
+        st.metric("Matched Pairs", len(results['matched_pairs']))
     with col3:
-        st.metric("WhatsApp Records", wa_count)
+        st.metric("Clusters", results['clusters']['ClusterID'].nunique() if len(results['clusters']) > 0 else 0)
     with col4:
-        st.metric("Clusters Found", total_clusters)
+        st.metric("Model ROC-AUC", f"{results['metrics'].get('roc_auc', 0):.3f}")
     
-    # Golden facilities table
-    st.markdown("### 🏥 Table 1 – Golden Facilities")
+    # Tabs for different views
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🎯 Matched Pairs", "🏥 Golden Records", "📁 Download"])
     
-    if len(golden_df) > 0:
-        display_cols = []
-        for c in ["GoldenID", "OfficialName", "District", "Sources", "RecordCount"]:
-            if c in golden_df.columns:
-                display_cols.append(c)
+    with tab1:
+        st.subheader("Matching Overview")
         
-        if display_cols:
-            st.dataframe(golden_df[display_cols], use_container_width=True)
-        else:
-            st.dataframe(golden_df, use_container_width=True)
-        
-        st.caption(f"Total golden facility records: {len(golden_df)}")
-    else:
-        st.info("No golden records generated yet. Check your VERO pipeline output.")
+        if len(results['matched_pairs']) > 0:
+            # Match probability distribution
+            fig = px.histogram(
+                results['matched_pairs'],
+                x='match_prob',
+                nbins=20,
+                title="Match Probability Distribution",
+                labels={'match_prob': 'Match Probability', 'count': 'Number of Pairs'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Source distribution
+            if len(results['clusters']) > 0:
+                source_dist = results['clusters']['Source'].value_counts()
+                fig = px.pie(
+                    values=source_dist.values,
+                    names=source_dist.index,
+                    title="Records by Source"
+                )
+                st.plotly_chart(fig, use_container_width=True)
     
-    # Sample cluster expanded
-    st.markdown("### 🧬 Table 2 – Sample Cluster (How Clustering Works)")
-    
-    if len(clusters_df) > 0 and "ClusterID" in clusters_df.columns:
-        cluster_ids = clusters_df["ClusterID"].unique()
-        
-        cluster_sizes = clusters_df.groupby("ClusterID").size().sort_values(ascending=False)
-        default_cluster = cluster_sizes.index[0]
-        
-        selected_cluster = st.selectbox(
-            "Select a ClusterID to inspect",
-            options=list(cluster_ids),
-            index=list(cluster_ids).index(default_cluster) if default_cluster in cluster_ids else 0
-        )
-        
-        sample_cluster = clusters_df[clusters_df["ClusterID"] == selected_cluster].copy()
-        
-        st.write(f"Showing all records in **{selected_cluster}** ({len(sample_cluster)} records):")
-        
-        sample_cols = []
-        for c in ["RecordID", "Source", "Name", "AltName", "District", "Phone"]:
-            if c in sample_cluster.columns:
-                sample_cols.append(c)
-        
-        if sample_cols:
-            st.dataframe(sample_cluster[sample_cols], use_container_width=True)
-        else:
-            st.dataframe(sample_cluster, use_container_width=True)
-        
-        st.caption("Each row is an original record from Gov/NGO/WhatsApp that VERO decided belongs to the same facility.")
-    else:
-        st.info("No cluster data available. Make sure your pipeline returns a 'clusters' DataFrame.")
-    
-    # Download buttons
-    st.markdown("### 📥 Step 5: Download Results")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("**Golden Facilities (CSV)**")
-        if len(golden_df) > 0:
-            st.download_button(
-                "⬇️ Download Golden Facilities",
-                golden_df.to_csv(index=False).encode("utf-8"),
-                "golden_facilities.csv",
-                "text/csv",
+    with tab2:
+        st.subheader("High-Confidence Matches")
+        if len(results['matched_pairs']) > 0:
+            display_cols = ['record_A', 'record_B', 'name_A', 'name_B', 'source_A', 'source_B', 'match_prob']
+            available_cols = [col for col in display_cols if col in results['matched_pairs'].columns]
+            st.dataframe(
+                results['matched_pairs'][available_cols].head(50),
                 use_container_width=True
             )
         else:
-            st.caption("No golden records to download.")
+            st.info("No matched pairs found")
     
-    with col2:
-        st.markdown("**Master Entity Table (CSV)**")
-        if len(clusters_df) > 0:
-            st.download_button(
-                "⬇️ Download Master Entity Table",
-                clusters_df.to_csv(index=False).encode("utf-8"),
-                "master_entity_table.csv",
-                "text/csv",
-                use_container_width=True
-            )
+    with tab3:
+        st.subheader("Golden Facility Records")
+        if len(results['golden']) > 0:
+            st.dataframe(results['golden'], use_container_width=True)
+            
+            # Cluster size distribution
+            if len(results['clusters']) > 0:
+                cluster_sizes = results['clusters'].groupby('ClusterID').size()
+                fig = px.histogram(
+                    x=cluster_sizes.values,
+                    nbins=10,
+                    title="Cluster Size Distribution",
+                    labels={'x': 'Records per Cluster', 'y': 'Number of Clusters'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.caption("No clusters to download.")
+            st.info("No golden records generated")
     
-    with col3:
-        st.markdown("**Matched Pairs (CSV)**")
-        if len(matched_df) > 0:
-            st.download_button(
-                "⬇️ Download Matched Pairs",
-                matched_df.to_csv(index=False).encode("utf-8"),
-                "matched_pairs.csv",
-                "text/csv",
-                use_container_width=True
-            )
-        else:
-            st.caption("No matched pairs to download.")
+    with tab4:
+        st.subheader("Download Results")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📥 Download All Results (Excel)")
+            
+            if st.button("Generate Excel File", use_container_width=True):
+                excel_data = to_excel({
+                    'Golden Records': results['golden'],
+                    'Matched Pairs': results['matched_pairs'],
+                    'All Clusters': results['clusters'],
+                    'Unified Dataset': results['unified']
+                })
+                
+                st.download_button(
+                    label="⬇️ Download Excel",
+                    data=excel_data,
+                    file_name="vero_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        
+        with col2:
+            st.markdown("### 📥 Download Individual Files (CSV)")
+            
+            if len(results['golden']) > 0:
+                st.download_button(
+                    "Golden Records CSV",
+                    results['golden'].to_csv(index=False),
+                    "golden_records.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            
+            if len(results['matched_pairs']) > 0:
+                st.download_button(
+                    "Matched Pairs CSV",
+                    results['matched_pairs'].to_csv(index=False),
+                    "matched_pairs.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            
+            if len(results['clusters']) > 0:
+                st.download_button(
+                    "All Clusters CSV",
+                    results['clusters'].to_csv(index=False),
+                    "clusters.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
 
-# Footer
+# ============================================================================
+# FOOTER
+# ============================================================================
+
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
     <p><strong>VERO - Entity Resolution Platform</strong></p>
-    <p>Powered by AI | © 2025</p>
+    <p>Powered by AI | Built with Streamlit | © 2025</p>
 </div>
 """, unsafe_allow_html=True)

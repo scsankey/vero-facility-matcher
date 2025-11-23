@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 import sys
+import traceback
 
 # Import the VERO engine
 from vero_engine import run_vero_pipeline
@@ -154,6 +155,12 @@ if 'results' not in st.session_state:
     st.session_state.results = None
 if 'processing' not in st.session_state:
     st.session_state.processing = False
+if 'gov_count' not in st.session_state:
+    st.session_state.gov_count = 0
+if 'ngo_count' not in st.session_state:
+    st.session_state.ngo_count = 0
+if 'wa_count' not in st.session_state:
+    st.session_state.wa_count = 0
 
 # ============================================================================
 # STEP 1: FILE UPLOAD
@@ -245,15 +252,20 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         st.markdown("---")
         st.header("🚀 Step 3: Run Entity Matching")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
+        col1m, col2m, col3m = st.columns(3)
+        with col1m:
             st.metric("Government Records", len(gov_df))
-        with col2:
+        with col2m:
             st.metric("NGO Records", len(ngo_df))
-        with col3:
+        with col3m:
             st.metric("WhatsApp Records", len(wa_df))
         
         if st.button("🎯 Start Matching", type="primary", use_container_width=True):
+            # Store record counts for later summary
+            st.session_state.gov_count = len(gov_df)
+            st.session_state.ngo_count = len(ngo_df)
+            st.session_state.wa_count = len(wa_df)
+
             st.session_state.processing = True
             
             with st.spinner("Running VERO matching pipeline..."):
@@ -262,7 +274,10 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                         gov_df=gov_df,
                         ngo_df=ngo_df,
                         whatsapp_df=wa_df,
-                        ground_truth_df=gt_df
+                        ground_truth_df=gt_df,
+                        high_threshold=high_threshold,
+                        medium_threshold=medium_threshold,
+                        district_threshold=district_threshold
                     )
                     
                     st.session_state.results = results
@@ -272,7 +287,6 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     
                 except Exception as e:
                     st.error(f"Error during matching: {str(e)}")
-                    import traceback
                     st.code(traceback.format_exc())
                     st.session_state.processing = False
 
@@ -284,129 +298,141 @@ if st.session_state.results:
     results = st.session_state.results
     
     st.markdown("---")
-    st.header("📈 Step 4: Results & Insights")
+    st.header("📈 Step 4: Results & Clustering Overview")
     
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Golden Records", len(results['golden']))
-    with col2:
-        st.metric("Matched Pairs", len(results['matched_pairs']))
-    with col3:
-        st.metric("Clusters", results['clusters']['ClusterID'].nunique() if len(results['clusters']) > 0 else 0)
-    with col4:
-        st.metric("Model ROC-AUC", f"{results['metrics'].get('roc_auc', 0):.3f}")
+    # Safely get outputs
+    clusters_df = results.get("clusters", pd.DataFrame())
+    golden_df   = results.get("golden", pd.DataFrame())
+    matched_df  = results.get("matched_pairs", pd.DataFrame())
+    metrics     = results.get("metrics", {})
     
-    # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🎯 Matched Pairs", "🏥 Golden Records", "📁 Download"])
+    gov_count = st.session_state.get("gov_count", 0)
+    ngo_count = st.session_state.get("ngo_count", 0)
+    wa_count  = st.session_state.get("wa_count", 0)
     
-    with tab1:
-        st.subheader("Matching Overview")
+    total_clusters = clusters_df["ClusterID"].nunique() if "ClusterID" in clusters_df.columns and len(clusters_df) > 0 else 0
+    
+    # -------------------------------------------------------------------------
+    # 4.1 Summary metrics
+    # -------------------------------------------------------------------------
+    st.subheader("🔢 Summary")
+    col1s, col2s, col3s, col4s = st.columns(4)
+    with col1s:
+        st.metric("Gov Records", gov_count)
+    with col2s:
+        st.metric("NGO Records", ngo_count)
+    with col3s:
+        st.metric("WhatsApp Records", wa_count)
+    with col4s:
+        st.metric("Clusters Found", total_clusters)
+    
+    # -------------------------------------------------------------------------
+    # 4.2 Golden facilities (Table 1)
+    # -------------------------------------------------------------------------
+    st.markdown("### 🏥 Table 1 – Golden Facilities")
+    
+    if len(golden_df) > 0:
+        display_cols = []
+        for c in ["ClusterID", "Golden_Name", "Golden_District", "Sources_Represented", "Record_Count"]:
+            if c in golden_df.columns:
+                display_cols.append(c)
         
-        if len(results['matched_pairs']) > 0:
-            # Match probability distribution
-            fig = px.histogram(
-                results['matched_pairs'],
-                x='match_prob',
-                nbins=20,
-                title="Match Probability Distribution",
-                labels={'match_prob': 'Match Probability', 'count': 'Number of Pairs'}
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Source distribution
-            if len(results['clusters']) > 0:
-                source_dist = results['clusters']['Source'].value_counts()
-                fig = px.pie(
-                    values=source_dist.values,
-                    names=source_dist.index,
-                    title="Records by Source"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        if display_cols:
+            st.dataframe(golden_df[display_cols], use_container_width=True)
+        else:
+            st.dataframe(golden_df, use_container_width=True)
+        
+        st.caption(f"Total golden facility records: {len(golden_df)}")
+    else:
+        st.info("No golden records generated yet. Check your VERO pipeline output.")
     
-    with tab2:
-        st.subheader("High-Confidence Matches")
-        if len(results['matched_pairs']) > 0:
-            display_cols = ['record_A', 'record_B', 'name_A', 'name_B', 'source_A', 'source_B', 'match_prob']
-            available_cols = [col for col in display_cols if col in results['matched_pairs'].columns]
-            st.dataframe(
-                results['matched_pairs'][available_cols].head(50),
+    # -------------------------------------------------------------------------
+    # 4.3 Sample cluster (Table 2)
+    # -------------------------------------------------------------------------
+    st.markdown("### 🧬 Table 2 – Sample Cluster (How Clustering Works)")
+    
+    if len(clusters_df) > 0 and "ClusterID" in clusters_df.columns:
+        cluster_ids = clusters_df["ClusterID"].unique()
+        
+        # pick largest cluster as default
+        cluster_sizes = clusters_df.groupby("ClusterID").size().sort_values(ascending=False)
+        default_cluster = cluster_sizes.index[0]
+        
+        selected_cluster = st.selectbox(
+            "Select a ClusterID to inspect",
+            options=list(cluster_ids),
+            index=list(cluster_ids).index(default_cluster) if default_cluster in cluster_ids else 0
+        )
+        
+        sample_cluster = clusters_df[clusters_df["ClusterID"] == selected_cluster].copy()
+        
+        st.write(
+            f"Showing all records in **Cluster {selected_cluster}** "
+            f"({len(sample_cluster)} records):"
+        )
+        
+        sample_cols = []
+        for c in ["RecordID", "Source", "Name", "AltName", "District", "Phone"]:
+            if c in sample_cluster.columns:
+                sample_cols.append(c)
+        
+        if sample_cols:
+            st.dataframe(sample_cluster[sample_cols], use_container_width=True)
+        else:
+            st.dataframe(sample_cluster, use_container_width=True)
+        
+        st.caption(
+            "Each row above is an original record from Gov/NGO/WhatsApp that VERO "
+            "decided belongs to the same real-world facility."
+        )
+    else:
+        st.info("No cluster data available to display. Make sure your pipeline returns a 'clusters' DataFrame.")
+    
+    # -------------------------------------------------------------------------
+    # 4.4 Download buttons
+    # -------------------------------------------------------------------------
+    st.markdown("### 📥 Step 5: Download Results")
+    
+    col1d, col2d, col3d = st.columns(3)
+    
+    with col1d:
+        st.markdown("**Golden Facilities (CSV)**")
+        if len(golden_df) > 0:
+            st.download_button(
+                "⬇️ Download Golden Facilities",
+                golden_df.to_csv(index=False).encode("utf-8"),
+                "golden_facilities.csv",
+                "text/csv",
                 use_container_width=True
             )
         else:
-            st.info("No matched pairs found")
+            st.caption("No golden records to download.")
     
-    with tab3:
-        st.subheader("Golden Facility Records")
-        if len(results['golden']) > 0:
-            st.dataframe(results['golden'], use_container_width=True)
-            
-            # Cluster size distribution
-            if len(results['clusters']) > 0:
-                cluster_sizes = results['clusters'].groupby('ClusterID').size()
-                fig = px.histogram(
-                    x=cluster_sizes.values,
-                    nbins=10,
-                    title="Cluster Size Distribution",
-                    labels={'x': 'Records per Cluster', 'y': 'Number of Clusters'}
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    with col2d:
+        st.markdown("**Master Entity Table (Clusters) (CSV)**")
+        if len(clusters_df) > 0:
+            st.download_button(
+                "⬇️ Download Master Entity Table",
+                clusters_df.to_csv(index=False).encode("utf-8"),
+                "master_entity_table.csv",
+                "text/csv",
+                use_container_width=True
+            )
         else:
-            st.info("No golden records generated")
+            st.caption("No clusters to download.")
     
-    with tab4:
-        st.subheader("Download Results")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 📥 Download All Results (Excel)")
-            
-            if st.button("Generate Excel File", use_container_width=True):
-                excel_data = to_excel({
-                    'Golden Records': results['golden'],
-                    'Matched Pairs': results['matched_pairs'],
-                    'All Clusters': results['clusters'],
-                    'Unified Dataset': results['unified']
-                })
-                
-                st.download_button(
-                    label="⬇️ Download Excel",
-                    data=excel_data,
-                    file_name="vero_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-        
-        with col2:
-            st.markdown("### 📥 Download Individual Files (CSV)")
-            
-            if len(results['golden']) > 0:
-                st.download_button(
-                    "Golden Records CSV",
-                    results['golden'].to_csv(index=False),
-                    "golden_records.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            
-            if len(results['matched_pairs']) > 0:
-                st.download_button(
-                    "Matched Pairs CSV",
-                    results['matched_pairs'].to_csv(index=False),
-                    "matched_pairs.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            
-            if len(results['clusters']) > 0:
-                st.download_button(
-                    "All Clusters CSV",
-                    results['clusters'].to_csv(index=False),
-                    "clusters.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
+    with col3d:
+        st.markdown("**Matched Pairs (CSV)**")
+        if len(matched_df) > 0:
+            st.download_button(
+                "⬇️ Download Matched Pairs",
+                matched_df.to_csv(index=False).encode("utf-8"),
+                "matched_pairs.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        else:
+            st.caption("No matched pairs to download.")
 
 # ============================================================================
 # FOOTER
@@ -419,3 +445,4 @@ st.markdown("""
     <p>Powered by AI | Built with Streamlit | © 2025</p>
 </div>
 """, unsafe_allow_html=True)
+

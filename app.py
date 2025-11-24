@@ -1,6 +1,6 @@
 """
 app.py
-VERO - Facility Entity Matching Platform
+VERO - Data Entity Matching Platform
 Upload → Match → Canonical Entities → LLM Chat → Download
 """
 

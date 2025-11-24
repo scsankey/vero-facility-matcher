@@ -6,3 +6,4 @@ rapidfuzz
 scikit-learn
 networkx
 torch
+requests

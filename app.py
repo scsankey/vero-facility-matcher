@@ -205,9 +205,9 @@ with col1:
 
 with col2:
     st.subheader("Option B: Separate CSV Files")
-    gov_csv = st.file_uploader("Government APIs, IoT", type=['csv'], key="gov")
-    ngo_csv = st.file_uploader("NGO pdf, email,etc", type=['csv'], key="ngo")
-    wa_csv = st.file_uploader("WhatsApp etc", type=['csv'], key="wa")
+    gov_csv = st.file_uploader("Government APIs, IoT, Folders, Paper Files", type=['csv'], key="gov")
+    ngo_csv = st.file_uploader("NGO pdf, email, Handwritten, pcitures, etc", type=['csv'], key="ngo")
+    wa_csv = st.file_uploader("WhatsApp, SMS, voice notes, Instruments, statellite etc", type=['csv'], key="wa")
     gt_csv = st.file_uploader("Ground Truth CSV (optional)", type=['csv'], key="gt")
 
 # ============================================================================
@@ -362,7 +362,7 @@ if st.session_state.results:
     # TAB 3: CANONICAL ENTITIES (ONLY TABLE WE SHOW)
     # ----------------------------------------------------------------------
     with tab3:
-        st.subheader("🧩 Canonical Entities (Intel. Services-Ready Identity Table)")
+        st.subheader("🧩 Canonical Entities ( VAS-Ready Identity Table)")
         st.caption("One row per real-world entity, deduplicated across all sources")
         
         if len(canonical) > 0:

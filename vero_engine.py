@@ -373,9 +373,7 @@ def build_clusters(matched_pairs_df, unified_df):
     
     return pd.DataFrame(cluster_rows)
 
-def build_golden_records(clusters_df):
-    """
-    Create golden facility records from clusters
+ records from clusters
     One golden record per cluster with best available data
     """
     golden_records = []
@@ -518,9 +516,16 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
     # Step 6: Build clusters and golden records
     print("\n[6/6] Building clusters and golden records...")
     clusters = build_clusters(matched_pairs, unified)
-    golden = build_golden_records(clusters)
+    
+    # NEW: Build multi-entity golden tables
+    golden_tables = build_golden_tables(clusters)
+    canonical_entities = build_canonical_entities_table(golden_tables)
+    
+    # Backward compatible: golden facilities
+    golden = golden_tables.get("golden_facilities", pd.DataFrame())
     
     print(f"✅ Created {len(golden)} golden facility records")
+    print(f"✅ Created {len(canonical_entities)} canonical entities")
     
     print("\n" + "="*70)
     print("VERO PIPELINE COMPLETE")
@@ -533,5 +538,10 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         "matched_pairs": matched_pairs,
         "model": model,
         "scaler": scaler,
-        "metrics": metrics
+        "metrics": metrics,
+        # NEW: Multi-entity golden tables
+        "golden_facilities": golden,
+        "golden_persons": golden_tables.get("golden_persons", pd.DataFrame()),
+        "golden_districts": golden_tables.get("golden_districts", pd.DataFrame()),
+        "canonical_entities": canonical_entities,
     }

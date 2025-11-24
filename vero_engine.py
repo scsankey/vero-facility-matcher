@@ -1,7 +1,7 @@
 """
 vero_engine.py
 VERO Entity Resolution Engine
-Consolidates all entity matching logic into reusable functions
+Core matching logic for facility entity resolution
 """
 
 import pandas as pd
@@ -14,10 +14,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
-
-# ============================================================================
-# GLOBAL CONFIGURATION
-# ============================================================================
 
 FEATURE_COLS = [
     "jw_name", "lev_name", "token_sim", "starts_with", "ends_with", "nickname",
@@ -32,18 +28,8 @@ MEDIUM_CONFIDENCE_THRESHOLD = 0.75
 NAME_SIMILARITY_THRESHOLD = 0.85
 DISTRICT_BLOCKING_THRESHOLD = 0.75
 
-# ============================================================================
-# DATA PREPARATION
-# ============================================================================
-
 def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
-    """
-    Combine all datasets into unified format with source indicators
-    
-    Returns:
-        pd.DataFrame: Unified dataset with columns [RecordID, Name, AltName, District, Phone, Source]
-    """
-    # Government Registry
+    """Combine all datasets into unified format"""
     gov_prepared = pd.DataFrame({
         'RecordID': gov_df['RecordID'],
         'Name': gov_df['OfficialFacilityName'],
@@ -53,7 +39,6 @@ def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
         'Source': 'Gov'
     })
     
-    # NGO Dataset
     ngo_prepared = pd.DataFrame({
         'RecordID': ngo_df['RecordID'],
         'Name': ngo_df['FacilityName'],
@@ -63,7 +48,6 @@ def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
         'Source': 'NGO'
     })
     
-    # WhatsApp Dataset
     whatsapp_prepared = pd.DataFrame({
         'RecordID': whatsapp_df['RecordID'],
         'Name': whatsapp_df['RelatedFacility'],
@@ -73,10 +57,8 @@ def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
         'Source': 'WhatsApp'
     })
     
-    # Combine all
     unified = pd.concat([gov_prepared, ngo_prepared, whatsapp_prepared], ignore_index=True)
     
-    # Clean fields
     unified["RecordID"] = unified["RecordID"].astype(str)
     unified["Source"] = unified["Source"].astype(str)
     unified["name_clean"] = (
@@ -89,12 +71,8 @@ def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
     
     return unified
 
-# ============================================================================
-# FEATURE COMPUTATION
-# ============================================================================
-
 def extract_facility_type(name: str) -> str:
-    """Extract facility type from name for blocking"""
+    """Extract facility type from name"""
     name_lower = str(name).lower()
     
     if 'district hospital' in name_lower:
@@ -125,11 +103,10 @@ def nickname_score(name_a: str, name_b: str) -> int:
     return 0
 
 def compute_pair_features(row_a, row_b, id_to_emb):
-    """Compute all similarity features for a pair of records"""
+    """Compute all similarity features for a pair"""
     name_a = row_a["name_clean"]
     name_b = row_b["name_clean"]
     
-    # Name similarities
     jw_name = distance.JaroWinkler.normalized_similarity(name_a, name_b)
     lev_name = distance.Levenshtein.normalized_similarity(name_a, name_b)
     token_sim = fuzz.token_set_ratio(name_a, name_b) / 100.0
@@ -140,7 +117,6 @@ def compute_pair_features(row_a, row_b, id_to_emb):
     ends_with = int(len(tokens_a) > 0 and len(tokens_b) > 0 and tokens_a[-1] == tokens_b[-1])
     nickname = nickname_score(name_a, name_b)
     
-    # Alt name similarities
     alt_a_a = row_a["alt_a_clean"]
     alt_a_b = row_b["alt_a_clean"]
     alt_b_a = row_a["alt_b_clean"]
@@ -152,13 +128,11 @@ def compute_pair_features(row_a, row_b, id_to_emb):
         alt_a_a + " " + alt_b_a, alt_a_b + " " + alt_b_b
     )
     
-    # District similarities
     district_a = row_a["district_clean"]
     district_b = row_b["district_clean"]
     district_exact = int(district_a == district_b and district_a != "")
     district_fuzzy = fuzz.token_set_ratio(district_a, district_b) / 100.0
     
-    # Phone similarities
     phone_a = row_a["phone_clean"]
     phone_b = row_b["phone_clean"]
     phone_exact = int(phone_a != "" and phone_a == phone_b)
@@ -168,7 +142,6 @@ def compute_pair_features(row_a, row_b, id_to_emb):
     phone_partial = int(last4_a != "" and last4_a == last4_b)
     phone_both_missing = int(phone_a == "" and phone_b == "")
     
-    # Embedding cosine similarity
     emb_a = id_to_emb.get(row_a.name)
     emb_b = id_to_emb.get(row_b.name)
     cos_embed = float(util.cos_sim(emb_a, emb_b).cpu().numpy()[0][0]) if emb_a is not None and emb_b is not None else 0.0
@@ -191,20 +164,13 @@ def compute_pair_features(row_a, row_b, id_to_emb):
         "phone_both_missing": phone_both_missing,
     }
 
-# ============================================================================
-# BLOCKING LOGIC
-# ============================================================================
-
 def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCKING_THRESHOLD):
-    """
-    Tightened blocking logic - requires at least 2 conditions
-    """
+    """Tightened blocking logic - requires at least 2 conditions"""
     if rid_a == rid_b:
         return False
     
     conditions_met = 0
     
-    # Condition 1: District match
     d_a = row_a["district_clean"]
     d_b = row_b["district_clean"]
     if d_a and d_b:
@@ -212,7 +178,6 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
         if district_score >= district_threshold:
             conditions_met += 1
     
-    # Condition 2: Phone last4 match
     p_a = row_a["phone_clean"]
     p_b = row_b["phone_clean"]
     last4_a = p_a[-4:] if len(p_a) >= 4 else ""
@@ -220,7 +185,6 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
     if last4_a and last4_a == last4_b:
         conditions_met += 1
     
-    # Condition 3: Meaningful name token overlap
     common_words = {'health', 'centre', 'center', 'hospital', 'district', 
                    'rural', 'clinic', 'post', 'community', 'area'}
     tokens_a = set(row_a["name_clean"].split()) - common_words
@@ -229,7 +193,6 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
     if len(tokens_a & tokens_b) > 0:
         conditions_met += 1
     
-    # Condition 4: Facility type must match (hard block)
     type_a = extract_facility_type(row_a["Name"])
     type_b = extract_facility_type(row_b["Name"])
     if type_a != 'unknown' and type_b != 'unknown':
@@ -248,7 +211,6 @@ def generate_candidate_pairs(unified_df):
     
     candidate_pairs = []
     
-    # NGO vs Gov
     for rid_ng in ngo_ids:
         row_ng = u_idx.loc[rid_ng]
         for rid_g in gov_ids:
@@ -256,7 +218,6 @@ def generate_candidate_pairs(unified_df):
             if should_compare(rid_ng, rid_g, row_ng, row_g):
                 candidate_pairs.append((rid_ng, rid_g))
     
-    # NGO vs WhatsApp
     for rid_ng in ngo_ids:
         row_ng = u_idx.loc[rid_ng]
         for rid_w in wa_ids:
@@ -264,7 +225,6 @@ def generate_candidate_pairs(unified_df):
             if should_compare(rid_ng, rid_w, row_ng, row_w):
                 candidate_pairs.append((rid_ng, rid_w))
     
-    # Gov vs WhatsApp
     for rid_g in gov_ids:
         row_g = u_idx.loc[rid_g]
         for rid_w in wa_ids:
@@ -274,32 +234,19 @@ def generate_candidate_pairs(unified_df):
     
     return list(set(candidate_pairs))
 
-# ============================================================================
-# MODEL TRAINING
-# ============================================================================
-
 def train_model(similarity_features_df):
-    """
-    Train logistic regression model
-    
-    Returns:
-        tuple: (model, scaler, metrics_dict)
-    """
-    # Prepare features and labels
+    """Train logistic regression model"""
     X = similarity_features_df[FEATURE_COLS].fillna(0)
     y = similarity_features_df['SameEntity']
     
-    # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train model
     model = LogisticRegression(
         random_state=42,
         max_iter=1000,
@@ -308,7 +255,6 @@ def train_model(similarity_features_df):
     )
     model.fit(X_train_scaled, y_train)
     
-    # Evaluate
     y_pred = model.predict(X_test_scaled)
     y_proba = model.predict_proba(X_test_scaled)[:, 1]
     
@@ -324,18 +270,12 @@ def train_model(similarity_features_df):
     
     return model, scaler, metrics
 
-# ============================================================================
-# CLUSTERING & GOLDEN RECORDS
-# ============================================================================
-
 def build_clusters(matched_pairs_df, unified_df):
     """Build entity clusters using graph connected components"""
-    # Build graph
     G = nx.Graph()
     for _, row in matched_pairs_df.iterrows():
         G.add_edge(row["record_A"], row["record_B"])
     
-    # Find clusters
     clusters = list(nx.connected_components(G))
     
     u_idx = unified_df.set_index("RecordID")
@@ -355,7 +295,6 @@ def build_clusters(matched_pairs_df, unified_df):
                 "Phone": row["Phone"],
             })
     
-    # Add singletons
     all_matched_ids = set(matched_pairs_df["record_A"]) | set(matched_pairs_df["record_B"])
     singleton_ids = set(unified_df["RecordID"]) - all_matched_ids
     
@@ -373,75 +312,119 @@ def build_clusters(matched_pairs_df, unified_df):
     
     return pd.DataFrame(cluster_rows)
 
- records from clusters
-    One golden record per cluster with best available data
-    """
-    golden_records = []
-    
-    for cluster_id, group in clusters_df.groupby("ClusterID"):
-        # Prioritize government data for official name
-        gov_records = group[group["Source"] == "Gov"]
-        
-        if len(gov_records) > 0:
-            primary = gov_records.iloc[0]
-        else:
-            primary = group.iloc[0]
-        
-        # Collect all names and phones
-        all_names = group["Name"].dropna().unique().tolist()
-        all_phones = group["Phone"].dropna().unique().tolist()
-        
-        golden_records.append({
-            "GoldenID": cluster_id,
-            "OfficialName": primary["Name"],
-            "AlternateNames": " | ".join(all_names),
-            "District": primary["District"],
-            "Phones": " | ".join([str(p) for p in all_phones]),
-            "Sources": " + ".join(group["Source"].unique()),
-            "RecordCount": len(group),
-            "SourceRecordIDs": " | ".join(group["RecordID"])
-        })
-    
-    return pd.DataFrame(golden_records)
+def build_golden_tables(clusters_df: pd.DataFrame) -> dict:
+    """Build golden tables for each entity type from clusters"""
+    if clusters_df is None or len(clusters_df) == 0:
+        return {}
 
-# ============================================================================
-# MAIN PIPELINE
-# ============================================================================
+    clusters_df = clusters_df.copy()
+
+    if "EntityType" not in clusters_df.columns:
+        clusters_df["EntityType"] = "facility"
+
+    golden_tables = {}
+
+    for entity_type, group in clusters_df.groupby("EntityType"):
+        rows = []
+        
+        for cluster_id, cluster_rows in group.groupby("ClusterID"):
+            canonical_name = None
+            if "Name" in cluster_rows.columns:
+                non_null = cluster_rows["Name"].dropna().astype(str)
+                if len(non_null) > 0:
+                    canonical_name = non_null.value_counts().idxmax()
+
+            alias_values = []
+            for col in ["Name", "AltName"]:
+                if col in cluster_rows.columns:
+                    alias_values.append(cluster_rows[col].dropna().astype(str))
+            
+            aliases_str = ""
+            if alias_values:
+                aliases = pd.unique(pd.concat(alias_values, ignore_index=True))
+                aliases_str = "; ".join(sorted(aliases))
+
+            main_district = None
+            if "District" in cluster_rows.columns:
+                non_null_dist = cluster_rows["District"].dropna().astype(str)
+                if len(non_null_dist) > 0:
+                    main_district = non_null_dist.value_counts().idxmax()
+
+            sources_str = ""
+            if "Source" in cluster_rows.columns:
+                srcs = cluster_rows["Source"].dropna().unique().tolist()
+                sources_str = ", ".join(sorted(map(str, srcs)))
+
+            rows.append({
+                "GoldenID": f"{entity_type[:3].upper()}_{cluster_id}",
+                "ClusterID": cluster_id,
+                "EntityType": entity_type,
+                "CanonicalName": canonical_name,
+                "Aliases": aliases_str,
+                "MainDistrict": main_district,
+                "SourcesRepresented": sources_str,
+                "RecordCount": len(cluster_rows),
+                "LLM_Summary": None,
+            })
+
+        golden_df = pd.DataFrame(rows)
+
+        if entity_type == "facility":
+            key = "golden_facilities"
+        elif entity_type == "person":
+            key = "golden_persons"
+        elif entity_type == "district":
+            key = "golden_districts"
+        else:
+            key = f"golden_{entity_type}s"
+
+        golden_tables[key] = golden_df
+
+    return golden_tables
+
+def build_canonical_entities_table(golden_tables: dict) -> pd.DataFrame:
+    """Merge all golden tables into single canonical entity table"""
+    dfs = []
+    for key, df in golden_tables.items():
+        if df is None or len(df) == 0:
+            continue
+        
+        tmp = df.copy()
+        for col in ["GoldenID", "EntityType", "CanonicalName", "Aliases",
+                    "MainDistrict", "SourcesRepresented", "RecordCount", "LLM_Summary", "ClusterID"]:
+            if col not in tmp.columns:
+                tmp[col] = None
+        
+        dfs.append(tmp[[
+            "GoldenID", "ClusterID", "EntityType", "CanonicalName", "Aliases",
+            "MainDistrict", "SourcesRepresented", "RecordCount", "LLM_Summary"
+        ]])
+
+    if not dfs:
+        return pd.DataFrame(columns=[
+            "GoldenID", "ClusterID", "EntityType", "CanonicalName", "Aliases",
+            "MainDistrict", "SourcesRepresented", "RecordCount", "LLM_Summary"
+        ])
+
+    return pd.concat(dfs, ignore_index=True)
 
 def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pretrained=False, pretrained_model=None, pretrained_scaler=None):
-    """
-    Main VERO pipeline - from raw data to golden records
-    
-    Parameters:
-        gov_df: Government registry DataFrame
-        ngo_df: NGO dataset DataFrame
-        whatsapp_df: WhatsApp dataset DataFrame
-        ground_truth_df: Optional ground truth for training (columns: Record_ID A, Record_ID B, Same Entity)
-        use_pretrained: If True, use provided model/scaler instead of training
-        pretrained_model: Pre-trained model (if use_pretrained=True)
-        pretrained_scaler: Pre-trained scaler (if use_pretrained=True)
-    
-    Returns:
-        dict with keys: unified, clusters, golden, matched_pairs, model, scaler, metrics
-    """
+    """Main VERO pipeline - from raw data to golden records"""
     
     print("="*70)
     print("VERO PIPELINE STARTING")
     print("="*70)
     
-    # Step 1: Prepare unified dataset
     print("\n[1/6] Preparing unified dataset...")
     unified = prepare_unified_dataset(gov_df, ngo_df, whatsapp_df)
     print(f"✅ Unified dataset: {len(unified)} records")
     
-    # Step 2: Compute embeddings
     print("\n[2/6] Computing embeddings...")
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     embeddings = embedding_model.encode(unified["name_clean"].tolist(), convert_to_tensor=True)
     id_to_emb = {rid: emb for rid, emb in zip(unified["RecordID"], embeddings)}
     print(f"✅ Embeddings computed")
     
-    # Step 3: Train or load model
     if use_pretrained and pretrained_model and pretrained_scaler:
         print("\n[3/6] Using pre-trained model...")
         model = pretrained_model
@@ -449,7 +432,6 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         metrics = {"note": "Using pre-trained model"}
     elif ground_truth_df is not None:
         print("\n[3/6] Training model from ground truth...")
-        # Build features from ground truth
         u_idx = unified.set_index("RecordID")
         
         features = []
@@ -472,12 +454,10 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
     else:
         raise ValueError("Must provide either ground_truth_df or use_pretrained=True with model/scaler")
     
-    # Step 4: Generate candidate pairs
     print("\n[4/6] Generating candidate pairs with blocking...")
     candidate_pairs = generate_candidate_pairs(unified)
     print(f"✅ Generated {len(candidate_pairs)} candidate pairs")
     
-    # Step 5: Compute features and predict
     print("\n[5/6] Computing features and predicting matches...")
     u_idx = unified.set_index("RecordID")
     
@@ -501,7 +481,6 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
     probs = model.predict_proba(X_cand_scaled)[:, 1]
     cand_features["match_prob"] = probs
     
-    # Filter strong matches (two-tier threshold)
     high_conf = cand_features[cand_features["match_prob"] >= HIGH_CONFIDENCE_THRESHOLD]
     medium_conf = cand_features[
         (cand_features["match_prob"] >= MEDIUM_CONFIDENCE_THRESHOLD) &
@@ -513,15 +492,12 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
     
     print(f"✅ Found {len(matched_pairs)} strong matches")
     
-    # Step 6: Build clusters and golden records
     print("\n[6/6] Building clusters and golden records...")
     clusters = build_clusters(matched_pairs, unified)
     
-    # NEW: Build multi-entity golden tables
     golden_tables = build_golden_tables(clusters)
     canonical_entities = build_canonical_entities_table(golden_tables)
     
-    # Backward compatible: golden facilities
     golden = golden_tables.get("golden_facilities", pd.DataFrame())
     
     print(f"✅ Created {len(golden)} golden facility records")
@@ -539,7 +515,6 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         "model": model,
         "scaler": scaler,
         "metrics": metrics,
-        # NEW: Multi-entity golden tables
         "golden_facilities": golden,
         "golden_persons": golden_tables.get("golden_persons", pd.DataFrame()),
         "golden_districts": golden_tables.get("golden_districts", pd.DataFrame()),

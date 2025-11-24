@@ -1,5 +1,3 @@
-st.cache_data.clear()
-st.cache_resource.clear()
 
 """
 app.py

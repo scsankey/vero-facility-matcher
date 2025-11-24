@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer, util
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-'import warnings
+import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================================================

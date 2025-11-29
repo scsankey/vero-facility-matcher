@@ -16,23 +16,24 @@ import time
 from vero_engine import run_vero_pipeline
 
 # ══════════════════════════════════════════════════════════════════════════
-# HUGGING FACE INTEGRATION - UPDATED FOR NEW API
+# GOOGLE GEMINI INTEGRATION
 # ══════════════════════════════════════════════════════════════════════════
 
-def query_huggingface_llm(user_query, canonical_context, max_retries=2):
+def query_google_gemini(user_query, canonical_context, max_retries=2):
     """
-    Query Hugging Face using InferenceClient (new API).
-    No need for api_url - InferenceClient handles routing automatically.
+    Query Google Gemini API with canonical data context.
+    Uses google-generativeai library for Gemini access.
     """
     try:
-        from huggingface_hub import InferenceClient
+        import google.generativeai as genai
         
         # Get credentials from secrets
-        HF_TOKEN = st.secrets["huggingface"]["token"]
-        MODEL = st.secrets["huggingface"]["model"]
+        GOOGLE_API_KEY = st.secrets["google_ai"]["api_key"]
+        MODEL_NAME = st.secrets["google_ai"]["model"]
         
-        # Create client (handles routing automatically)
-        client = InferenceClient(token=HF_TOKEN)
+        # Configure Gemini
+        genai.configure(api_key=GOOGLE_API_KEY)
+        model = genai.GenerativeModel(MODEL_NAME)
         
         # Build prompt with strict data-grounding instructions
         prompt = f"""You are a crop data analyst. Answer using ONLY the data below.
@@ -42,22 +43,23 @@ DATA:
 
 QUESTION: {user_query}
 
-ANSWER:"""
+ANSWER (be concise and specific):"""
         
         # Query with retry logic
         for attempt in range(max_retries):
             try:
-                response = client.text_generation(
+                response = model.generate_content(
                     prompt,
-                    model=MODEL,
-                    max_new_tokens=400,
-                    temperature=0.2,
-                    top_p=0.85,
-                    repetition_penalty=1.2,
+                    generation_config={
+                        "temperature": 0.3,
+                        "top_p": 0.85,
+                        "top_k": 40,
+                        "max_output_tokens": 400,
+                    }
                 )
                 
-                if response and len(response.strip()) > 10:
-                    return response.strip()
+                if response.text and len(response.text.strip()) > 10:
+                    return response.text.strip()
                     
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -69,9 +71,9 @@ ANSWER:"""
         return get_fallback_response(user_query)
         
     except ImportError:
-        return "❌ **Error:** huggingface_hub library not installed. Using fallback response...\n\n" + get_fallback_response(user_query)
+        return "❌ **Error:** google-generativeai library not installed. Using fallback response...\n\n" + get_fallback_response(user_query)
     except KeyError:
-        return "❌ **Configuration Error:** Hugging Face credentials not found in secrets"
+        return "❌ **Configuration Error:** Google AI credentials not found in secrets"
     except Exception as e:
         return f"❌ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
 
@@ -194,15 +196,16 @@ def get_fallback_response(user_query):
 
 
 def generate_llm_story(canonical_data_summary, max_retries=2):
-    """Generate value chain story using Hugging Face InferenceClient"""
+    """Generate value chain story using Google Gemini"""
     
     try:
-        from huggingface_hub import InferenceClient
+        import google.generativeai as genai
         
-        HF_TOKEN = st.secrets["huggingface"]["token"]
-        MODEL = st.secrets["huggingface"]["model"]
+        GOOGLE_API_KEY = st.secrets["google_ai"]["api_key"]
+        MODEL_NAME = st.secrets["google_ai"]["model"]
         
-        client = InferenceClient(token=HF_TOKEN)
+        genai.configure(api_key=GOOGLE_API_KEY)
+        model = genai.GenerativeModel(MODEL_NAME)
         
         prompt = f"""Write a narrative story about crop production using this data:
 
@@ -212,17 +215,18 @@ Create an engaging story with chapters about the challenge, performance, and pat
 
         for attempt in range(max_retries):
             try:
-                story = client.text_generation(
+                response = model.generate_content(
                     prompt,
-                    model=MODEL,
-                    max_new_tokens=800,
-                    temperature=0.7,
-                    top_p=0.9,
-                    repetition_penalty=1.3,
+                    generation_config={
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "top_k": 40,
+                        "max_output_tokens": 800,
+                    }
                 )
                 
-                if story and len(story) > 100:
-                    return story.strip()
+                if response.text and len(response.text) > 100:
+                    return response.text.strip()
                     
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -1160,8 +1164,8 @@ if st.session_state.results:
                         # Build context from canonical data
                         canonical_context = build_canonical_context(corrected_query)
                         
-                        # Call Hugging Face LLM
-                        response = query_huggingface_llm(corrected_query, canonical_context)
+                        # Call Google Gemini API
+                        response = query_google_gemini(corrected_query, canonical_context)
                         
                         # Display response
                         st.markdown(response)

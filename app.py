@@ -1,13 +1,14 @@
-
 """
 app.py
 VERO - Data Entity Matching Platform
 Upload → Match → Canonical Entities → LLM Chat → Download
+Enhanced with Executive Dashboard
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from io import BytesIO
 import requests
 
@@ -39,6 +40,23 @@ st.markdown("""
         color: #666;
         text-align: center;
         margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .metric-value {
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin: 0.5rem 0;
+    }
+    .metric-label {
+        font-size: 0.9rem;
+        opacity: 0.9;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -112,6 +130,177 @@ def call_llm_free(prompt: str) -> str:
             return str(data)
     except Exception as e:
         return f"❌ Error calling LLM: {e}"
+
+def calculate_executive_metrics(results):
+    """Calculate executive KPIs from results"""
+    canonical = results.get("canonical_entities", pd.DataFrame())
+    matched = results.get("matched_pairs", pd.DataFrame())
+    clusters = results.get("clusters", pd.DataFrame())
+    unified = results.get("unified", pd.DataFrame())
+    metrics = results.get("metrics", {})
+    
+    # 1. Data Quality Score (0-100)
+    # Based on: model performance, match confidence, data completeness
+    roc_auc = metrics.get('roc_auc', 0)
+    avg_match_conf = matched['match_prob'].mean() if len(matched) > 0 else 0
+    completeness = calculate_data_completeness(unified)
+    data_quality_score = int((roc_auc * 40) + (avg_match_conf * 40) + (completeness * 20))
+    
+    # 2. Match Confidence (%)
+    match_confidence = int(avg_match_conf * 100) if len(matched) > 0 else 0
+    
+    # 3. Duplicate Rate (%)
+    total_records = len(unified)
+    unique_entities = len(canonical)
+    duplicates = total_records - unique_entities
+    duplicate_rate = int((duplicates / total_records * 100)) if total_records > 0 else 0
+    
+    # 4. Cross-Source Matches (count)
+    cross_source_matches = 0
+    if len(clusters) > 0 and "ClusterID" in clusters.columns:
+        for cluster_id, group in clusters.groupby("ClusterID"):
+            if group["Source"].nunique() > 1:
+                cross_source_matches += 1
+    
+    # 5. Data Completeness (%)
+    data_completeness = int(completeness * 100)
+    
+    return {
+        "data_quality_score": data_quality_score,
+        "match_confidence": match_confidence,
+        "duplicate_rate": duplicate_rate,
+        "cross_source_matches": cross_source_matches,
+        "data_completeness": data_completeness
+    }
+
+def calculate_data_completeness(unified_df):
+    """Calculate average data completeness across key fields"""
+    if unified_df is None or len(unified_df) == 0:
+        return 0.0
+    
+    key_fields = ['Name', 'District', 'Phone']
+    completeness_scores = []
+    
+    for field in key_fields:
+        if field in unified_df.columns:
+            non_null = unified_df[field].notna().sum()
+            completeness_scores.append(non_null / len(unified_df))
+    
+    return sum(completeness_scores) / len(completeness_scores) if completeness_scores else 0.0
+
+def create_sankey_diagram(results):
+    """Create Sankey diagram showing data flow"""
+    unified = results.get("unified", pd.DataFrame())
+    matched = results.get("matched_pairs", pd.DataFrame())
+    canonical = results.get("canonical_entities", pd.DataFrame())
+    
+    # Count records by source
+    gov_count = len(unified[unified["Source"] == "Gov"])
+    ngo_count = len(unified[unified["Source"] == "NGO"])
+    wa_count = len(unified[unified["Source"] == "WhatsApp"])
+    total_records = len(unified)
+    
+    # Count matched vs unmatched
+    matched_ids = set(matched["record_A"]) | set(matched["record_B"])
+    matched_count = len(matched_ids)
+    unmatched_count = total_records - matched_count
+    
+    # Canonical entities
+    canonical_count = len(canonical)
+    
+    # Sankey nodes
+    nodes = [
+        "Government",      # 0
+        "NGO",            # 1
+        "WhatsApp",       # 2
+        "Matched",        # 3
+        "Unmatched",      # 4
+        "Canonical Entities"  # 5
+    ]
+    
+    # Sankey links (source, target, value)
+    # Approximate: each source contributes proportionally to matched/unmatched
+    gov_matched = int(gov_count * (matched_count / total_records))
+    ngo_matched = int(ngo_count * (matched_count / total_records))
+    wa_matched = int(wa_count * (matched_count / total_records))
+    
+    gov_unmatched = gov_count - gov_matched
+    ngo_unmatched = ngo_count - ngo_matched
+    wa_unmatched = wa_count - wa_matched
+    
+    links = [
+        # Sources to Matched
+        {"source": 0, "target": 3, "value": gov_matched, "label": f"{gov_matched}"},
+        {"source": 1, "target": 3, "value": ngo_matched, "label": f"{ngo_matched}"},
+        {"source": 2, "target": 3, "value": wa_matched, "label": f"{wa_matched}"},
+        # Sources to Unmatched
+        {"source": 0, "target": 4, "value": gov_unmatched, "label": f"{gov_unmatched}"},
+        {"source": 1, "target": 4, "value": ngo_unmatched, "label": f"{ngo_unmatched}"},
+        {"source": 2, "target": 4, "value": wa_unmatched, "label": f"{wa_unmatched}"},
+        # Matched to Canonical
+        {"source": 3, "target": 5, "value": canonical_count, "label": f"{canonical_count}"},
+        # Unmatched to Canonical (singletons)
+        {"source": 4, "target": 5, "value": unmatched_count, "label": f"{unmatched_count}"},
+    ]
+    
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=15,
+            thickness=20,
+            line=dict(color="black", width=0.5),
+            label=nodes,
+            color=["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+        ),
+        link=dict(
+            source=[link["source"] for link in links],
+            target=[link["target"] for link in links],
+            value=[link["value"] for link in links],
+            label=[link["label"] for link in links]
+        )
+    )])
+    
+    fig.update_layout(
+        title="Data Flow: Sources → Matching → Canonical Entities",
+        font_size=12,
+        height=500
+    )
+    
+    return fig
+
+def create_alias_bar_chart(results):
+    """Create interactive bar chart of top 10 entities by alias count"""
+    canonical = results.get("canonical_entities", pd.DataFrame())
+    
+    if len(canonical) == 0 or "Aliases" not in canonical.columns:
+        return None
+    
+    # Count aliases for each entity
+    canonical['alias_count'] = canonical['Aliases'].fillna('').apply(
+        lambda x: len([a.strip() for a in str(x).split(';') if a.strip()]) if x else 0
+    )
+    
+    # Get top 10
+    top_10 = canonical.nlargest(10, 'alias_count')[['CanonicalName', 'alias_count', 'GoldenID', 'EntityType', 'MainDistrict']]
+    
+    # Create bar chart
+    fig = px.bar(
+        top_10,
+        x='CanonicalName',
+        y='alias_count',
+        title="Top 10 Entities by Number of Alias Names",
+        labels={'CanonicalName': 'Canonical Entity Name', 'alias_count': 'Number of Aliases'},
+        color='alias_count',
+        color_continuous_scale='Blues',
+        hover_data=['EntityType', 'MainDistrict', 'GoldenID']
+    )
+    
+    fig.update_layout(
+        xaxis_tickangle=-45,
+        height=500,
+        showlegend=False
+    )
+    
+    return fig, top_10
 
 # ============================================================================
 # SIDEBAR
@@ -324,27 +513,115 @@ if st.session_state.results:
     ])
     
     # ----------------------------------------------------------------------
-    # TAB 1: OVERVIEW
+    # TAB 1: OVERVIEW WITH EXECUTIVE DASHBOARD
     # ----------------------------------------------------------------------
     with tab1:
-        st.subheader("Matching Overview")
+        st.subheader("Executive Summary")
         
+        # 1. EXECUTIVE SCORECARD
+        exec_metrics = calculate_executive_metrics(results)
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric(
+                label="📊 Data Quality Score",
+                value=f"{exec_metrics['data_quality_score']}/100",
+                delta="Excellent" if exec_metrics['data_quality_score'] >= 80 else "Good"
+            )
+        
+        with col2:
+            st.metric(
+                label="🎯 Match Confidence",
+                value=f"{exec_metrics['match_confidence']}%",
+                delta="High" if exec_metrics['match_confidence'] >= 75 else "Medium"
+            )
+        
+        with col3:
+            st.metric(
+                label="📉 Duplicate Rate",
+                value=f"{exec_metrics['duplicate_rate']}%",
+                delta=f"{exec_metrics['duplicate_rate']}% duplicates found"
+            )
+        
+        with col4:
+            st.metric(
+                label="🔗 Cross-Source Matches",
+                value=exec_metrics['cross_source_matches'],
+                delta="Entities in multiple sources"
+            )
+        
+        with col5:
+            st.metric(
+                label="✅ Data Completeness",
+                value=f"{exec_metrics['data_completeness']}%",
+                delta="Across key fields"
+            )
+        
+        st.markdown("---")
+        
+        # 2. SANKEY DIAGRAM
+        st.subheader("Data Flow Visualization")
+        sankey_fig = create_sankey_diagram(results)
+        st.plotly_chart(sankey_fig, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 3. ALIAS BAR CHART
+        st.subheader("Top 10 Entities by Alias Count")
+        alias_result = create_alias_bar_chart(results)
+        
+        if alias_result:
+            alias_fig, top_10_df = alias_result
+            st.plotly_chart(alias_fig, use_container_width=True)
+            
+            # Interactive detail view
+            st.markdown("##### 🔍 Click to View Entity Details")
+            selected_entity = st.selectbox(
+                "Select an entity to see its aliases:",
+                top_10_df['CanonicalName'].tolist(),
+                key="alias_selector"
+            )
+            
+            if selected_entity:
+                entity_row = canonical[canonical['CanonicalName'] == selected_entity].iloc[0]
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.info(f"""
+                    **Entity:** {entity_row['CanonicalName']}  
+                    **Type:** {entity_row['EntityType']}  
+                    **District:** {entity_row['MainDistrict']}  
+                    **Golden ID:** {entity_row['GoldenID']}
+                    """)
+                
+                with col_b:
+                    aliases = [a.strip() for a in str(entity_row['Aliases']).split(';') if a.strip()]
+                    st.success(f"""
+                    **Total Aliases:** {len(aliases)}  
+                    **Sources:** {entity_row['SourcesRepresented']}  
+                    **Record Count:** {entity_row['RecordCount']}
+                    """)
+                
+                st.markdown("**All Alias Names:**")
+                for i, alias in enumerate(aliases, 1):
+                    st.write(f"{i}. {alias}")
+        else:
+            st.info("No alias data available")
+        
+        st.markdown("---")
+        
+        # 4. MATCH PROBABILITY DISTRIBUTION (EXISTING)
+        st.subheader("Match Probability Distribution")
         if len(matched) > 0 and "match_prob" in matched.columns:
             fig = px.histogram(
                 matched, x='match_prob', nbins=20,
-                title="Match Probability Distribution",
+                title="Distribution of Match Confidence Scores",
                 labels={'match_prob': 'Probability', 'count': 'Pairs'}
             )
             st.plotly_chart(fig, use_container_width=True)
-        
-        if len(clusters) > 0 and "Source" in clusters.columns:
-            source_dist = clusters["Source"].value_counts()
-            fig = px.pie(
-                values=source_dist.values,
-                names=source_dist.index,
-                title="Records by Source"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No matched pairs to display")
 
     # ----------------------------------------------------------------------
     # TAB 2: MATCHED PAIRS
@@ -359,10 +636,10 @@ if st.session_state.results:
             st.info("No matched pairs found")
 
     # ----------------------------------------------------------------------
-    # TAB 3: CANONICAL ENTITIES (ONLY TABLE WE SHOW)
+    # TAB 3: CANONICAL ENTITIES
     # ----------------------------------------------------------------------
     with tab3:
-        st.subheader("🧩 Canonical Entities ( VAS-Ready Identity Table)")
+        st.subheader("🧩 Canonical Entities (VAS-Ready Identity Table)")
         st.caption("One row per real-world entity, deduplicated across all sources")
         
         if len(canonical) > 0:
@@ -514,7 +791,7 @@ ANSWER (2-4 paragraphs):
                             st.write(answer)
 
     # ----------------------------------------------------------------------
-    # TAB 6: SIMULATIONS & APIS (PLACEHOLDER)
+    # TAB 6: SIMULATIONS & APIS
     # ----------------------------------------------------------------------
     with tab6:
         st.subheader("🧪 Simulations & External APIs")

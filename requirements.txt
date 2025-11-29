@@ -8,3 +8,4 @@ scikit-learn
 networkx
 torch
 requests
+huggingface_hub

@@ -30,7 +30,7 @@ def render_debug_page():
     try:
         hf_token = st.secrets["huggingface"]["token"]
         hf_model = st.secrets["huggingface"]["model"]
-        hf_api_url = st.secrets["huggingface"]["api_url"]
+        hf_api_url = st.secrets["huggingface"].get("api_url", "N/A - Using InferenceClient")  # Optional now
         
         st.success("✅ Secrets loaded successfully!")
         
@@ -310,6 +310,35 @@ def test_inference_client(hf_token):
 
 def test_current_config(hf_token, hf_api_url):
     """Test 5: Test current configuration"""
+    
+    if hf_api_url == "N/A - Using InferenceClient":
+        st.info("ℹ️ **No api_url configured** - Your app uses InferenceClient (recommended)")
+        st.write("InferenceClient handles routing automatically, no URL needed!")
+        
+        # Test InferenceClient directly
+        st.write("🧪 **Testing InferenceClient with your configuration...**")
+        
+        try:
+            from huggingface_hub import InferenceClient
+            
+            # Get model from secrets
+            hf_model = st.secrets["huggingface"]["model"]
+            
+            client = InferenceClient(token=hf_token)
+            
+            response = client.text_generation(
+                "Hello",
+                model=hf_model,
+                max_new_tokens=10,
+            )
+            
+            st.success("✅ **Your configuration WORKS!**")
+            st.code(f"Response: {response}")
+            
+        except Exception as e:
+            st.error(f"❌ **Error:** {e}")
+        
+        return
     
     st.write(f"🧪 **Testing your current API URL:**")
     st.code(hf_api_url)

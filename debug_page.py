@@ -1,559 +1,288 @@
 """
-Debug Page for VERO Streamlit App
-Add this as a new tab to diagnose HuggingFace API issues
+Debug Page for VERO Streamlit App  
+Tests Google AI (Gemini) API integration
 """
 
 import streamlit as st
-import requests
 import json
 from datetime import datetime
 
 
 def render_debug_page():
-    """Render the HuggingFace API debug page"""
+    """Render the Google AI API debug page"""
     
-    st.title("🔍 HuggingFace API Debugger")
+    st.title("🔍 Google AI (Gemini) API Debugger")
     st.markdown("---")
     
     st.info("""
-    **This page will help diagnose issues with HuggingFace API integration.**
+    **This page will help diagnose issues with Google AI (Gemini) API integration.**
     
     It will test:
-    1. ✅ Token validation
-    2. 🔍 Old Inference API (api-inference.huggingface.co)
-    3. 🔍 Router API (router.huggingface.co)
-    4. 🔍 InferenceClient library
-    5. 📊 Model accessibility
+    1. ✅ API key validation
+    2. 🔍 Model availability
+    3. 🔍 Text generation
+    4. 📊 Your current configuration
     """)
     
-    # Get token from secrets
+    # Get credentials from secrets
     try:
-        hf_token = st.secrets["huggingface"]["token"]
-        hf_model = st.secrets["huggingface"]["model"]
-        hf_api_url = st.secrets["huggingface"].get("api_url", "N/A - Using InferenceClient")  # Optional now
+        google_api_key = st.secrets["google_ai"]["api_key"]
+        google_model = st.secrets["google_ai"]["model"]
         
         st.success("✅ Secrets loaded successfully!")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            st.metric("Token Length", f"{len(hf_token)} chars")
+            st.metric("API Key Length", f"{len(google_api_key)} chars")
         with col2:
-            st.metric("Model", hf_model)
-        with col3:
-            token_preview = f"{hf_token[:10]}...{hf_token[-5:]}" if len(hf_token) > 15 else hf_token
-            st.metric("Token Preview", token_preview)
+            st.metric("Model", google_model)
             
     except Exception as e:
         st.error(f"❌ **Error loading secrets:** {e}")
-        st.warning("Make sure your `.streamlit/secrets.toml` is configured!")
+        st.warning("Make sure your `.streamlit/secrets.toml` has the `[google_ai]` section!")
+        st.code("""[google_ai]
+api_key = "YOUR_GOOGLE_AI_STUDIO_KEY"
+model = "gemini-2.0-flash-exp"
+""", language="toml")
         return
     
     st.markdown("---")
     
     # Run tests button
     if st.button("🚀 Run All Diagnostic Tests", type="primary"):
-        run_all_tests(hf_token, hf_model, hf_api_url)
+        run_all_tests(google_api_key, google_model)
 
 
-def run_all_tests(hf_token, hf_model, hf_api_url):
+def run_all_tests(google_api_key, google_model):
     """Run all diagnostic tests"""
     
     results = {
-        'token_valid': False,
-        'old_api_works': False,
-        'router_works': False,
-        'client_works': False,
+        'key_valid': False,
+        'model_works': False,
+        'generation_works': False,
     }
     
-    # Test 1: Token Validation
-    with st.expander("📋 **TEST 1: Token Validation**", expanded=True):
-        results['token_valid'] = test_token_validation(hf_token)
+    # Test 1: API Key Format
+    with st.expander("📋 **TEST 1: API Key Format Check**", expanded=True):
+        results['key_valid'] = test_api_key_format(google_api_key)
     
-    if not results['token_valid']:
-        st.error("🔴 **Token is invalid! Fix this first before running other tests.**")
+    if not results['key_valid']:
+        st.error("🔴 **API key format issue! Check your key.**")
         return
     
-    # Test 2: Old Inference API
-    with st.expander("🔍 **TEST 2: Old Inference API** (api-inference.huggingface.co)", expanded=True):
-        results['old_api_works'] = test_old_inference_api(hf_token)
+    # Test 2: Model Availability
+    with st.expander("🔍 **TEST 2: Model Availability**", expanded=True):
+        results['model_works'] = test_model_availability(google_api_key, google_model)
     
-    # Test 3: Router API
-    with st.expander("🔍 **TEST 3: Router API** (router.huggingface.co)", expanded=True):
-        results['router_works'] = test_router_api(hf_token)
-    
-    # Test 4: InferenceClient
-    with st.expander("🔍 **TEST 4: InferenceClient Library**", expanded=True):
-        results['client_works'] = test_inference_client(hf_token)
-    
-    # Test 5: Current Configuration
-    with st.expander("⚙️ **TEST 5: Your Current Configuration**", expanded=True):
-        test_current_config(hf_token, hf_api_url)
+    # Test 3: Text Generation
+    with st.expander("🔍 **TEST 3: Text Generation Test**", expanded=True):
+        results['generation_works'] = test_text_generation(google_api_key, google_model)
     
     # Summary and Recommendations
     st.markdown("---")
-    show_summary_and_recommendations(results, hf_token)
+    show_summary_and_recommendations(results, google_api_key, google_model)
 
 
-def test_token_validation(hf_token):
-    """Test 1: Validate HuggingFace token"""
+def test_api_key_format(google_api_key):
+    """Test 1: Check API key format"""
     
-    st.write("🔍 **Checking token format...**")
+    st.write("🔍 **Checking API key format...**")
     
-    # Format checks
-    issues = []
-    
-    if not hf_token.startswith("hf_"):
-        issues.append("⚠️ Token should start with 'hf_'")
-    else:
-        st.success("✅ Token starts with 'hf_'")
-    
-    if len(hf_token) < 30:
-        issues.append(f"⚠️ Token seems short ({len(hf_token)} chars)")
-    else:
-        st.success(f"✅ Token length: {len(hf_token)} characters")
-    
-    if " " in hf_token or "\n" in hf_token:
-        issues.append("❌ Token contains spaces/newlines!")
-        for issue in issues:
-            st.error(issue)
+    # Check key format
+    if not google_api_key or len(google_api_key) < 30:
+        st.error(f"❌ API key seems too short ({len(google_api_key)} chars)")
+        st.warning("Google AI Studio API keys are typically 39 characters long")
         return False
     
-    if issues:
-        for issue in issues:
-            st.warning(issue)
-    
-    # Test with API
-    st.write("🔍 **Testing token with HuggingFace API...**")
-    
-    url = "https://huggingface.co/api/whoami-v2"
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            st.success("✅ **TOKEN IS VALID!**")
-            
-            # Show details
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Token Details:**")
-                st.json({
-                    "type": data.get('type', 'unknown'),
-                    "name": data.get('name', 'unknown'),
-                })
-            
-            with col2:
-                auth_info = data.get('auth', {})
-                if auth_info:
-                    token_info = auth_info.get('accessToken', {})
-                    st.write("**Permissions:**")
-                    st.json({
-                        "role": token_info.get('role', 'unknown'),
-                        "display_name": token_info.get('displayName', 'unknown'),
-                    })
-            
-            return True
-            
-        elif response.status_code == 401:
-            st.error("❌ **Invalid token or unauthorized**")
-            st.code(response.text)
-            return False
-            
-        else:
-            st.warning(f"⚠️ Unexpected status: {response.status_code}")
-            st.code(response.text)
-            return False
-            
-    except Exception as e:
-        st.error(f"❌ **Error:** {e}")
+    if " " in google_api_key or "\n" in google_api_key:
+        st.error("❌ API key contains spaces or newlines!")
         return False
+    
+    st.success(f"✅ API key format looks valid ({len(google_api_key)} characters)")
+    return True
 
 
-def test_old_inference_api(hf_token):
-    """Test 2: Old Inference API"""
+def test_model_availability(google_api_key, google_model):
+    """Test 2: Check if model is available"""
     
-    models = ["distilgpt2", "gpt2"]
-    
-    for model in models:
-        st.write(f"🧪 **Testing: {model}**")
-        
-        url = f"https://api-inference.huggingface.co/models/{model}"
-        headers = {"Authorization": f"Bearer {hf_token}"}
-        payload = {
-            "inputs": "Hello",
-            "parameters": {"max_new_tokens": 10}
-        }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
-            st.code(f"URL: {url}\nStatus: {response.status_code}")
-            
-            if response.status_code == 200:
-                st.success("✅ **SUCCESS! This API works!**")
-                result = response.json()
-                st.json(result)
-                return True
-                
-            elif response.status_code == 503:
-                st.info("⏳ **Model is loading** (this means endpoint WORKS!)")
-                st.code(response.text)
-                return True
-                
-            elif response.status_code == 410:
-                st.error("❌ **410 DEPRECATED**")
-                st.code(response.text)
-                if "router" in response.text:
-                    st.info("💡 Response suggests using router.huggingface.co")
-                    
-            elif response.status_code == 401:
-                st.error("❌ **UNAUTHORIZED**")
-                st.code(response.text)
-                
-            else:
-                st.warning(f"⚠️ Error {response.status_code}")
-                st.code(response.text)
-                
-        except Exception as e:
-            st.error(f"❌ Exception: {e}")
-    
-    return False
-
-
-def test_router_api(hf_token):
-    """Test 3: Router API"""
-    
-    models = ["distilgpt2", "gpt2"]
-    
-    for model in models:
-        st.write(f"🧪 **Testing: {model}**")
-        
-        url = f"https://router.huggingface.co/models/{model}"
-        headers = {"Authorization": f"Bearer {hf_token}"}
-        payload = {
-            "inputs": "Hello",
-            "parameters": {"max_new_tokens": 10}
-        }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
-            st.code(f"URL: {url}\nStatus: {response.status_code}")
-            
-            if response.status_code == 200:
-                st.success("✅ **SUCCESS! Router API works!**")
-                result = response.json()
-                st.json(result)
-                return True
-                
-            elif response.status_code == 503:
-                st.info("⏳ **Model is loading** (endpoint works!)")
-                st.code(response.text)
-                return True
-                
-            elif response.status_code == 404:
-                st.error("❌ **404 NOT FOUND**")
-                st.code(response.text)
-                
-            elif response.status_code == 401:
-                st.error("❌ **UNAUTHORIZED**")
-                st.code(response.text)
-                if "Invalid username or password" in response.text:
-                    st.warning("💡 This is the error you mentioned!")
-                    
-            else:
-                st.warning(f"⚠️ Error {response.status_code}")
-                st.code(response.text)
-                
-        except Exception as e:
-            st.error(f"❌ Exception: {e}")
-    
-    return False
-
-
-def test_inference_client(hf_token):
-    """Test 4: InferenceClient"""
+    st.write(f"🔍 **Testing model: {google_model}**")
     
     try:
-        from huggingface_hub import InferenceClient
-        st.success("✅ huggingface_hub library is installed")
+        import google.generativeai as genai
+        
+        genai.configure(api_key=google_api_key)
+        
+        # Try to create model instance
+        model = genai.GenerativeModel(google_model)
+        
+        st.success(f"✅ **Model {google_model} is available!**")
+        return True
+        
     except ImportError:
-        st.error("❌ huggingface_hub not installed")
-        st.code("pip install huggingface_hub")
-        return False
-    
-    st.write("🧪 **Testing InferenceClient...**")
-    
-    try:
-        # Get model from secrets
-        hf_model = st.secrets["huggingface"]["model"]
-        
-        client = InferenceClient(token=hf_token)
-        st.success("✅ Client created successfully")
-        
-        # METHOD 1: Try text_generation
-        st.write(f"🧪 **Method 1: text_generation() with {hf_model}...**")
-        try:
-            response = client.text_generation(
-                "Hello",
-                model=hf_model,
-                max_new_tokens=20,
-            )
-            st.success("✅ **Method 1 SUCCESS!**")
-            st.code(f"Response: {response}")
-            return True
-        except StopIteration:
-            st.warning("⚠️ Method 1: StopIteration (empty response)")
-        except Exception as e:
-            st.warning(f"⚠️ Method 1 failed: {type(e).__name__}: {str(e)}")
-        
-        # METHOD 2: Try with stream=True
-        st.write(f"🧪 **Method 2: text_generation() with stream=True...**")
-        try:
-            response_parts = []
-            for token in client.text_generation(
-                "Hello",
-                model=hf_model,
-                max_new_tokens=20,
-                stream=True,
-            ):
-                response_parts.append(token)
-            
-            response = "".join(response_parts)
-            if response:
-                st.success("✅ **Method 2 SUCCESS!**")
-                st.code(f"Response: {response}")
-                return True
-            else:
-                st.warning("⚠️ Method 2: Empty response")
-        except Exception as e:
-            st.warning(f"⚠️ Method 2 failed: {type(e).__name__}: {str(e)}")
-        
-        # METHOD 3: Try post() method directly
-        st.write(f"🧪 **Method 3: post() method...**")
-        try:
-            response = client.post(
-                json={"inputs": "Hello"},
-                model=hf_model,
-            )
-            st.success("✅ **Method 3 SUCCESS!**")
-            st.json(response)
-            return True
-        except Exception as e:
-            st.warning(f"⚠️ Method 3 failed: {type(e).__name__}: {str(e)}")
-        
-        # METHOD 4: Try different model type (flan-t5)
-        if "gpt" in hf_model.lower():
-            st.write(f"🧪 **Method 4: Try with flan-t5-small instead...**")
-            try:
-                response = client.text_generation(
-                    "Translate to French: Hello",
-                    model="google/flan-t5-small",
-                    max_new_tokens=20,
-                )
-                st.success("✅ **Method 4 SUCCESS with flan-t5!**")
-                st.code(f"Response: {response}")
-                st.info("💡 Consider switching to flan-t5-small in your secrets")
-                return True
-            except Exception as e:
-                st.warning(f"⚠️ Method 4 failed: {type(e).__name__}: {str(e)}")
-        
-        st.error("❌ **All methods failed**")
-        st.warning("""
-        **This suggests HuggingFace's free Serverless Inference API may not be working.**
-        
-        **Options:**
-        1. Use fallback responses (already in your app)
-        2. Try again in a few hours (API might be having issues)
-        3. Use paid Inference Endpoints
-        4. Switch to different LLM provider (OpenAI, Anthropic)
-        """)
+        st.error("❌ **google-generativeai library not installed**")
+        st.code("pip install google-generativeai")
         return False
         
     except Exception as e:
-        st.error(f"❌ **Error:** {e}")
-        st.code(f"Error type: {type(e).__name__}\nDetails: {str(e)}")
+        st.error(f"❌ **Error:** {type(e).__name__}")
+        st.code(f"Details: {str(e)}")
+        
+        if "API_KEY_INVALID" in str(e) or "invalid" in str(e).lower():
+            st.warning("""
+**Your API key appears to be invalid.**
+
+**Steps to fix:**
+1. Go to https://aistudio.google.com/apikey
+2. Create a new API key
+3. Copy it carefully (no spaces!)
+4. Update your Streamlit secrets
+""")
+        
         return False
 
 
-def test_current_config(hf_token, hf_api_url):
-    """Test 5: Test current configuration"""
+def test_text_generation(google_api_key, google_model):
+    """Test 3: Test text generation"""
     
-    if hf_api_url == "N/A - Using InferenceClient":
-        st.info("ℹ️ **No api_url configured** - Your app uses InferenceClient (recommended)")
-        st.write("InferenceClient handles routing automatically, no URL needed!")
-        
-        # Test InferenceClient directly
-        st.write("🧪 **Testing InferenceClient with your configuration...**")
-        
-        try:
-            from huggingface_hub import InferenceClient
-            
-            # Get model from secrets
-            hf_model = st.secrets["huggingface"]["model"]
-            
-            client = InferenceClient(token=hf_token)
-            
-            st.write(f"Testing with model: `{hf_model}`")
-            
-            response = client.text_generation(
-                "Hello",
-                model=hf_model,
-                max_new_tokens=10,
-            )
-            
-            st.success("✅ **Your configuration WORKS!**")
-            st.code(f"Response: {response}")
-            
-        except StopIteration as e:
-            st.error("❌ **StopIteration Error**")
-            st.warning("Model returned empty response. Try waiting 30 seconds or use a different model.")
-            st.code(f"Error: {str(e)}")
-            
-        except Exception as e:
-            st.error(f"❌ **Error:** {type(e).__name__}")
-            st.code(f"Details: {str(e)}")
-            
-            # Suggest solutions
-            st.markdown("""
-            **Possible solutions:**
-            1. Wait 30 seconds (model loading)
-            2. Try model: `google/flan-t5-small`
-            3. Check token has "Inference" permissions
-            4. Use fallback responses (already in app)
-            """)
-        
-        return
-    
-    st.write(f"🧪 **Testing your current API URL:**")
-    st.code(hf_api_url)
-    
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    payload = {
-        "inputs": "Hello",
-        "parameters": {"max_new_tokens": 10}
-    }
+    st.write(f"🔍 **Testing text generation with {google_model}...**")
     
     try:
-        response = requests.post(hf_api_url, headers=headers, json=payload, timeout=30)
+        import google.generativeai as genai
         
-        st.write(f"**Status Code:** {response.status_code}")
+        genai.configure(api_key=google_api_key)
+        model = genai.GenerativeModel(google_model)
         
-        if response.status_code == 200:
-            st.success("✅ **Your current configuration WORKS!**")
-            result = response.json()
-            st.json(result)
-            
-        elif response.status_code == 503:
-            st.info("⏳ **Model is loading** (your config works, just wait 20 sec)")
-            st.code(response.text)
-            
+        # Simple test prompt
+        test_prompt = "Say 'Hello, I am working!' in a friendly way."
+        
+        st.write("Sending test prompt...")
+        
+        response = model.generate_content(
+            test_prompt,
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_output_tokens": 100,
+            }
+        )
+        
+        if response.text:
+            st.success("✅ **Text generation WORKS!**")
+            st.code(f"Response: {response.text}")
+            return True
         else:
-            st.error(f"❌ **Your current configuration FAILS** (Status {response.status_code})")
-            st.code(response.text)
+            st.warning("⚠️ **Got empty response**")
+            return False
             
     except Exception as e:
-        st.error(f"❌ **Exception:** {e}")
+        st.error(f"❌ **Error:** {type(e).__name__}")
+        st.code(f"Details: {str(e)}")
+        
+        # Provide specific guidance
+        if "quota" in str(e).lower() or "limit" in str(e).lower():
+            st.warning("""
+**Rate limit or quota exceeded.**
+
+**Free tier limits:**
+- 15 requests per minute
+- 1 million tokens per day
+
+**Wait a few minutes and try again.**
+""")
+        elif "SAFETY" in str(e):
+            st.warning("Response blocked by safety filters (normal for some prompts)")
+        
+        return False
 
 
-def show_summary_and_recommendations(results, hf_token):
+def show_summary_and_recommendations(results, google_api_key, google_model):
     """Show test summary and recommendations"""
     
     st.header("📊 Test Results Summary")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if results['token_valid']:
-            st.success("✅ Token Valid")
+        if results['key_valid']:
+            st.success("✅ API Key Valid")
         else:
-            st.error("❌ Token Invalid")
+            st.error("❌ API Key Invalid")
     
     with col2:
-        if results['old_api_works']:
-            st.success("✅ Old API Works")
+        if results['model_works']:
+            st.success("✅ Model Available")
         else:
-            st.error("❌ Old API Fails")
+            st.error("❌ Model Unavailable")
     
     with col3:
-        if results['router_works']:
-            st.success("✅ Router Works")
+        if results['generation_works']:
+            st.success("✅ Generation Works")
         else:
-            st.error("❌ Router Fails")
-    
-    with col4:
-        if results['client_works']:
-            st.success("✅ Client Works")
-        else:
-            st.error("❌ Client Fails")
+            st.error("❌ Generation Fails")
     
     st.markdown("---")
     st.header("🎯 Recommendations")
     
-    if not results['token_valid']:
-        st.error("🔴 **CRITICAL: Your token is invalid!**")
+    if not results['key_valid']:
+        st.error("🔴 **CRITICAL: Your API key is invalid!**")
         st.markdown("""
-        **Action Items:**
-        1. Go to: https://huggingface.co/settings/tokens
-        2. Create a NEW token with 'Read' permission
-        3. Update Streamlit secrets with new token
-        4. Restart app and run this debug again
-        """)
+**Action Items:**
+1. Go to: https://aistudio.google.com/apikey
+2. Click "Create API key"
+3. Copy the key (should be ~39 characters)
+4. Update Streamlit secrets:
+
+```toml
+[google_ai]
+api_key = "YOUR_KEY_HERE"
+model = "gemini-2.0-flash-exp"
+```
+""")
         return
     
-    if results['old_api_works']:
-        st.success("✅ **Old API Works!**")
-        st.markdown("**Update your Streamlit secrets to:**")
-        st.code(f"""[huggingface]
-token = "{hf_token[:10]}...{hf_token[-5:]}"
-model = "distilgpt2"
-api_url = "https://api-inference.huggingface.co/models/distilgpt2"
-""", language="toml")
+    if results['key_valid'] and results['model_works'] and results['generation_works']:
+        st.success("✅ **Everything is working perfectly!**")
+        st.markdown(f"""
+**Your Google AI configuration:**
+
+```toml
+[google_ai]
+api_key = "{google_api_key[:10]}...{google_api_key[-5:]}"
+model = "{google_model}"
+```
+
+**You're ready to use AI chat and storytelling!**
+
+Go to the **VAS** tab and try:
+- Deep Dive Chat: Ask about your crop data
+- AI Storytelling: Generate value chain stories
+""")
         return
     
-    if results['router_works']:
-        st.success("✅ **Router API Works!**")
-        st.markdown("**Update your Streamlit secrets to:**")
-        st.code(f"""[huggingface]
-token = "{hf_token[:10]}...{hf_token[-5:]}"
-model = "distilgpt2"
-api_url = "https://router.huggingface.co/models/distilgpt2"
-""", language="toml")
-        return
-    
-    if results['client_works']:
-        st.success("✅ **InferenceClient Works!**")
+    if results['model_works'] and not results['generation_works']:
+        st.warning("⚠️ **Model available but generation failed**")
         st.markdown("""
-        **Your app needs code changes to use InferenceClient.**
-        
-        Would you like me to provide the updated code?
-        """)
+**Possible causes:**
+1. Rate limit exceeded (wait a few minutes)
+2. Safety filters blocking response
+3. Network issues
+
+**Try:**
+- Wait 5 minutes and test again
+- Check your internet connection
+- Try a different model: `gemini-2.0-flash-exp`
+""")
         return
     
-    st.error("🔴 **NONE of the APIs are working!**")
+    st.error("🔴 **Configuration issues detected**")
     st.markdown("""
-    **Recommended Solutions:**
-    
-    1. **Use Fallback Responses** (Already in your app!)
-       - Your app has curated responses that work without any API
-       - Perfect for demos and testing
-       - Just disable the LLM features temporarily
-    
-    2. **Try a Different Model**
-       - Some models require accepting terms first
-       - Visit model page and click "Agree and access"
-    
-    3. **Use Different Provider**
-       - OpenAI API (costs ~$0.01 per query but very reliable)
-       - Anthropic Claude API
-       - Google Gemini API
-    
-    4. **Deploy Local Model**
-       - Run model on your own server
-       - I can help set this up
-    """)
+**Recommended actions:**
+1. Verify API key is correct
+2. Check model name is valid
+3. Ensure internet connectivity
+4. Try creating a new API key
+""")
 
 
 # For testing standalone

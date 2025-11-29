@@ -10,102 +10,98 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
-import requests
 import time
 
 # Import the VERO engine
 from vero_engine import run_vero_pipeline
 
 # ══════════════════════════════════════════════════════════════════════════
-# HUGGING FACE INTEGRATION
+# HUGGING FACE INTEGRATION - LOCAL MODEL LOADING
 # ══════════════════════════════════════════════════════════════════════════
 
-def query_huggingface_llm(user_query, canonical_context, max_retries=2):
+@st.cache_resource
+def load_llm_model():
     """
-    Query Hugging Face LLM with canonical data context.
-    Implements retry logic and fallback to mock responses.
+    Load the LLM model once and cache it.
+    Uses model from secrets.toml
     """
     try:
-        # Get token from secrets
-        HF_TOKEN = st.secrets["huggingface"]["token"]
-        API_URL = st.secrets["huggingface"]["api_url"]
+        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+        import torch
+        
+        # Get model from secrets
+        model_id = st.secrets["huggingface"]["model"]
+        
+        print(f"Loading model: {model_id} ...")
+        
+        # Load tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        
+        # Use GPU if available (usually not on Streamlit Cloud)
+        device = 0 if torch.cuda.is_available() else -1
+        
+        # Create pipeline
+        text_gen = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            device=device,
+        )
+        
+        return text_gen, True
+        
+    except Exception as e:
+        print(f"Failed to load model: {e}")
+        return None, False
+
+
+def query_huggingface_llm(user_query, canonical_context, max_retries=1):
+    """
+    Query local HuggingFace model with canonical data context.
+    Uses transformers pipeline instead of API calls.
+    """
+    try:
+        # Load model (cached)
+        text_gen, model_loaded = load_llm_model()
+        
+        if not model_loaded or text_gen is None:
+            return "⚠️ **Model not available.** Using fallback response...\n\n" + get_fallback_response(user_query)
         
         # Build prompt with strict data-grounding instructions
-        prompt = f"""You are a crop value chain data analyst. Answer the question using ONLY the provided canonical data. Never add external information or make assumptions.
+        prompt = f"""You are a crop data analyst. Answer using ONLY the data below.
 
-CANONICAL CROP PRODUCTION DATA:
+DATA:
 {canonical_context}
 
-USER QUESTION: {user_query}
+QUESTION: {user_query}
 
-CRITICAL INSTRUCTIONS:
-- Use ONLY information from the canonical data above
-- If data is insufficient, explicitly state what's missing
-- Provide specific metrics (MT, percentages, districts) when available
-- Keep response factual and concise (2-3 paragraphs maximum)
-- Format with clear sections and bullet points where helpful
-- Never hallucinate or invent data
-
-RESPONSE:"""
+ANSWER:"""
         
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 400,
-                "temperature": 0.2,  # Very low for factual responses
-                "top_p": 0.85,
-                "repetition_penalty": 1.2,
-                "do_sample": True,
-                "return_full_text": False
-            }
-        }
+        # Generate response
+        outputs = text_gen(
+            prompt,
+            max_length=300,
+            do_sample=True,
+            top_p=0.9,
+            temperature=0.7,
+            num_return_sequences=1,
+        )
         
-        # Retry logic
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-                response.raise_for_status()
-                
-                result = response.json()
-                
-                # Handle different response formats
-                if isinstance(result, list) and len(result) > 0:
-                    generated_text = result[0].get("generated_text", "")
-                elif isinstance(result, dict):
-                    generated_text = result.get("generated_text", "")
-                else:
-                    generated_text = str(result)
-                
-                # Clean up response
-                answer = generated_text.strip()
-                
-                # Verify response has content
-                if answer and len(answer) > 10:
-                    return answer
-                else:
-                    raise ValueError("Empty or too short response")
-                    
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    time.sleep(2)  # Wait before retry
-                    continue
-                else:
-                    return "⏱️ **API Timeout:** The request took too long. Using fallback response...\n\n" + get_fallback_response(user_query)
-                    
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1:
-                    time.sleep(2)
-                    continue
-                else:
-                    return f"⚠️ **API Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
+        # Extract generated text
+        generated_text = outputs[0]["generated_text"]
         
-    except KeyError:
-        return "❌ **Configuration Error:** Hugging Face token not found in secrets. Please configure `.streamlit/secrets.toml`"
+        # Remove the prompt from response
+        answer = generated_text.replace(prompt, "").strip()
+        
+        # Verify response has content
+        if answer and len(answer) > 10:
+            return answer
+        else:
+            return get_fallback_response(user_query)
+            
     except Exception as e:
-        return f"❌ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
-    
-    return get_fallback_response(user_query)
+        return f"⚠️ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
 
 
 def build_canonical_context(user_query):
@@ -121,22 +117,22 @@ CROP PRODUCTION SUMMARY (2024):
 
 CROP-SPECIFIC PERFORMANCE:
 1. Maize: 4,680 MT (vs 5,000 MT planned) = 94% achievement
-   - Status: ✓ Strong performer
+   - Status: Strong performer
    - Key Districts: Mbale, Tororo
    
 2. Coffee: 2,940 MT (vs 3,500 MT planned) = 84% achievement
-   - Status: ⚠ Below target
+   - Status: Below target
    - Key District: Mukono (720 MT actual vs 850 MT planned = -15%)
    - Issues: Delayed rainfall, coffee rust (120 hectares affected)
    - Farmers: 142 coffee farmers engaged
    - Average yield: 5.1 MT/farmer (vs 6.0 MT target)
    
 3. Beans: 1,850 MT (vs 2,000 MT planned) = 93% achievement
-   - Status: ✓ Good performance
+   - Status: Good performance
    - Key Districts: Masaka, Rakai
    
 4. Cassava: 1,380 MT (vs 2,000 MT planned) = 69% achievement
-   - Status: ⚠ Critical underperformance (-31%)
+   - Status: Critical underperformance (-31%)
    - Shortfall: 620 MT
    - Key Districts: Luwero (-45%), Masindi (-38%), Hoima (-28%)
    
@@ -146,13 +142,6 @@ CASSAVA ROOT CAUSES:
 - Pest Outbreak: 18% impact
 - Late Planting: 15% impact
 - Poor Storage: 12% impact
-
-INTERVENTIONS PLANNED:
-- Drought-resistant varieties (150 farmers)
-- Emergency fertilizer distribution (200 MT)
-- Irrigation pilot sites (5 locations)
-- Pest monitoring stations (10 units)
-- Extension officer deployment (Mukono: 45 → 80)
 """
     
     # Add query-specific context
@@ -160,15 +149,13 @@ INTERVENTIONS PLANNED:
     
     if "mukono" in query_lower or "coffee" in query_lower:
         context += """
-        
+
 MUKONO DISTRICT DETAIL (Coffee):
 - Planned: 850 MT
 - Actual: 720 MT
 - Variance: -130 MT (-15%)
 - Farmers: 142 coffee farmers
 - Issues: Coffee rust disease (120 hectares), delayed rainfall Q2
-- Extension: 45 officers (target: 80)
-- Recommendation: Increase extension support, coffee rust control
 """
     
     if "cassava" in query_lower:
@@ -179,165 +166,98 @@ CASSAVA DETAILED ANALYSIS:
 - Total shortfall: 620 MT
 - Districts affected: Luwero, Masindi, Hoima
 - Primary cause: Severe drought (35% of variance)
-- Secondary causes: Fertilizer shortage (20%), Pest outbreak (18%)
-- Recovery plan: Drought-resistant varieties, irrigation, fertilizer kits
 """
     
     return context
 
 
 def get_fallback_response(user_query):
-    """Fallback mock responses when API fails"""
+    """Fallback curated responses when model fails"""
     query_lower = user_query.lower()
     
     if "mukono" in query_lower or "coffee" in query_lower:
-        return """**Mukono District - Coffee Production Analysis**
+        return """**Mukono District - Coffee Production**
 
-Based on canonical crop production data:
+**Performance:** 720 MT actual vs 850 MT planned (-15%)
 
-**Performance Summary:**
-- **Planned Production:** 850 MT
-- **Actual Production:** 720 MT  
-- **Variance:** -130 MT (-15% below target)
-- **Status:** ⚠️ Below target
-
-**Key Metrics:**
-- **Farmers Engaged:** 142 coffee farmers
-- **Average Yield:** 5.1 MT/farmer (vs 6.0 MT target)
-- **District Contribution:** 24% of total coffee shortfall
-
-**Root Causes:**
+**Key Issues:**
+- Coffee rust disease (120 hectares affected)
 - Delayed rainfall in Q2 2024
-- Coffee rust disease affecting 120 hectares
-- Limited extension services (45 officers vs 80 target)
+- Limited extension services (45 vs 80 target)
 
-**Recommendations:**
-- Increase extension officer deployment (45 → 80)
-- Implement coffee rust control program
-- Quality improvement training for premium pricing"""
+**Farmers:** 142 coffee farmers
+**Yield:** 5.1 MT/farmer (vs 6.0 target)
+
+**Recommendation:** Increase extension officers to 80"""
     
     elif "cassava" in query_lower:
         return """**Cassava Production Overview**
 
-**Performance Summary:**
-- **Total Production:** 1,380 MT (vs 2,000 MT planned)
-- **Variance:** -620 MT (-31%)
-- **Status:** 🔴 Critical underperformance
+**Performance:** 1,380 MT vs 2,000 MT planned (-31%)
 
-**Root Cause Analysis:**
-1. **Drought Season** (35% impact)
-2. **Fertilizer Shortage** (20% impact)
-3. **Pest Outbreak** (18% impact)
-4. **Late Planting** (15% impact)
-5. **Poor Storage** (12% impact)
+**Root Causes:**
+1. Drought Season (35%)
+2. Fertilizer Shortage (20%)
+3. Pest Outbreak (18%)
 
-**Most Affected Districts:**
-- Luwero: -45% variance
-- Masindi: -38% variance
-- Hoima: -28% variance
+**Affected Districts:** Luwero (-45%), Masindi (-38%), Hoima (-28%)
 
-**Recovery Actions:**
-✓ Drought-resistant varieties (150 farmers)
-✓ Emergency fertilizer distribution (200 MT)
-✓ Irrigation pilot sites (5 locations)
-✓ Pest monitoring stations (10 units)"""
+**Actions:** Drought-resistant varieties, emergency fertilizer, irrigation pilots"""
     
     else:
-        return """**Overall Crop Performance Summary (2024)**
+        return """**Overall Crop Performance (2024)**
 
-**Total Production:** 10,850 MT (vs 12,500 MT planned) - **87% achievement**
+**Total:** 10,850 MT (87% of 12,500 MT target)
 
-**Crop Breakdown:**
-- 🌾 **Maize:** 4,680 MT (94% of target) ✓
-- ☕ **Coffee:** 2,940 MT (84% of target) ⚠️
-- 🫘 **Beans:** 1,850 MT (93% of target) ✓
-- 🥔 **Cassava:** 1,380 MT (69% of target) 🔴
+**By Crop:**
+- Maize: 4,680 MT (94%) - Strong
+- Coffee: 2,940 MT (84%) - Below target
+- Beans: 1,850 MT (93%) - Good
+- Cassava: 1,380 MT (69%) - Critical
 
-**Key Insights:**
-- Market prices increased 16% ($450 → $520/MT)
-- 1,420 farmers engaged (95% of target)
-- Revenue target achieved: $5.64M (101%)
-- Cassava underperformance (-31%) main concern
-
-**Strategic Focus:**
-- Address cassava yield gap through drought resilience
-- Scale successful maize and beans practices
-- Improve coffee quality for premium pricing"""
+**Highlights:**
+- Market price +16% offset yield gap
+- Revenue 101% of target ($5.64M)
+- 1,420 farmers engaged (95%)"""
 
 
-def generate_llm_story(canonical_data_summary, max_retries=2):
-    """Generate value chain story using Hugging Face LLM"""
+def generate_llm_story(canonical_data_summary, max_retries=1):
+    """Generate value chain story using local HuggingFace model"""
     
     try:
-        HF_TOKEN = st.secrets["huggingface"]["token"]
-        API_URL = st.secrets["huggingface"]["api_url"]
+        # Load model (cached)
+        text_gen, model_loaded = load_llm_model()
         
-        prompt = f"""You are an expert agricultural storyteller. Write an engaging narrative about a crop value chain using ONLY the data provided below. Create a compelling story that combines data with human impact.
+        if not model_loaded or text_gen is None:
+            return None
+        
+        prompt = f"""Write a narrative story about crop production using this data:
 
-CANONICAL DATA:
 {canonical_data_summary}
 
-INSTRUCTIONS:
-- Write a narrative story (not a report) with chapters
-- Use ALL the data provided - every metric matters
-- Make it engaging and human-centered
-- Include specific numbers and percentages
-- Create emotional connection while staying factual
-- Structure: Challenge → Performance → Silver Lining → Path Forward
-- Length: 4-5 paragraphs total
-- Never invent data - use only what's provided
+Create an engaging story with chapters about the challenge, performance, and path forward:"""
 
-Write the story now:"""
-
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 800,
-                "temperature": 0.7,  # Higher for creative writing
-                "top_p": 0.9,
-                "repetition_penalty": 1.3,
-                "do_sample": True,
-                "return_full_text": False
-            }
-        }
+        # Generate story
+        outputs = text_gen(
+            prompt,
+            max_length=800,
+            do_sample=True,
+            top_p=0.9,
+            temperature=0.8,
+            num_return_sequences=1,
+        )
         
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(API_URL, headers=headers, json=payload, timeout=45)
-                response.raise_for_status()
-                
-                result = response.json()
-                
-                if isinstance(result, list) and len(result) > 0:
-                    story = result[0].get("generated_text", "")
-                elif isinstance(result, dict):
-                    story = result.get("generated_text", "")
-                else:
-                    story = str(result)
-                
-                if story and len(story) > 100:
-                    return story.strip()
-                else:
-                    raise ValueError("Story too short")
-                    
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                else:
-                    return None
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                else:
-                    return None
-                    
+        generated_text = outputs[0]["generated_text"]
+        story = generated_text.replace(prompt, "").strip()
+        
+        if story and len(story) > 100:
+            return story
+        else:
+            return None
+            
     except Exception as e:
+        print(f"Story generation error: {e}")
         return None
-    
-    return None
 
 st.set_page_config(
     page_title="VERO - Entity Resolution",
@@ -826,14 +746,15 @@ if st.session_state.results:
     with col4:
         st.metric("Model ROC-AUC", f"{metrics.get('roc_auc', 0):.3f}")
     
-    # Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    # Tabs (ADDED DEBUG TAB)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab_debug = st.tabs([
         "📊 Overview",
         "🎯 Matched Pairs",
         "🧩 Canonical Entities",
         "📁 Download",
         "💼 Value Added Services",
-        "🌐 APIs"
+        "🌐 APIs",
+        "🔍 Debug HF"
     ])
     
     # ----------------------------------------------------------------------
@@ -1739,6 +1660,13 @@ Our canonical data doesn't just track crops; it tracks dreams, resilience, and t
             st.button("Sync External Registry", disabled=True, use_container_width=True)
             st.button("Pull Ground-Truth Data", disabled=True, use_container_width=True)
             st.button("Push to Partner System", disabled=True, use_container_width=True)
+
+    # TAB 7: DEBUG HUGGINGFACE
+    # ----------------------------------------------------------------------
+    with tab_debug:
+        # Import and render debug page
+        from debug_page import render_debug_page
+        render_debug_page()
 
 # ============================================================================
 # FOOTER

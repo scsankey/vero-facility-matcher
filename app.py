@@ -1181,12 +1181,8 @@ if st.session_state.results:
                     })
             
             st.info("""
-            ✨ **Powered by Hugging Face LLM (Mistral-7B-Instruct):**
+            ✨ **Powered by Hugging Face LLM (Gemini 2.5 Flash):**
             - 🤖 Real AI responses grounded in canonical data only
-            - ✅ Corrects spelling errors automatically
-            - 🚫 Zero hallucinations - refuses to answer without data
-            - 🔄 Fallback to curated responses if API unavailable
-            - 🎯 Optimized for factual, data-driven answers
             """)
         
         # ══════════════════════════════════════════════════════════════════

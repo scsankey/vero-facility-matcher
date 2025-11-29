@@ -287,24 +287,52 @@ def test_inference_client(hf_token):
     st.write("🧪 **Testing InferenceClient...**")
     
     try:
+        # Get model from secrets
+        hf_model = st.secrets["huggingface"]["model"]
+        
         client = InferenceClient(token=hf_token)
         st.success("✅ Client created successfully")
         
-        st.write("🧪 **Attempting text generation...**")
+        st.write(f"🧪 **Attempting text generation with {hf_model}...**")
         
-        response = client.text_generation(
-            "Hello, how are you?",
-            model="distilgpt2",
-            max_new_tokens=20,
-        )
-        
-        st.success("✅ **SUCCESS! InferenceClient works!**")
-        st.code(response)
-        return True
+        # Try with detailed error catching
+        try:
+            response = client.text_generation(
+                "Hello, how are you?",
+                model=hf_model,
+                max_new_tokens=20,
+            )
+            
+            st.success("✅ **SUCCESS! InferenceClient works!**")
+            st.code(f"Response: {response}")
+            return True
+            
+        except StopIteration as e:
+            st.error("❌ **StopIteration Error**")
+            st.warning("""
+            **This error means the model returned an empty response.**
+            
+            **Possible causes:**
+            1. Model is still loading (wait 30 sec and retry)
+            2. Model incompatible with text_generation
+            3. Token missing specific permissions
+            
+            **Try:**
+            - Wait 30 seconds and run test again
+            - Try model: "google/flan-t5-small"
+            - Or use fallback responses (already in app)
+            """)
+            st.code(f"Full error: {str(e)}")
+            return False
+            
+        except Exception as e:
+            st.error(f"❌ **Error during generation:** {type(e).__name__}")
+            st.code(f"Details: {str(e)}")
+            return False
         
     except Exception as e:
         st.error(f"❌ **Error:** {e}")
-        st.code(f"Error type: {type(e).__name__}")
+        st.code(f"Error type: {type(e).__name__}\nDetails: {str(e)}")
         return False
 
 
@@ -326,6 +354,8 @@ def test_current_config(hf_token, hf_api_url):
             
             client = InferenceClient(token=hf_token)
             
+            st.write(f"Testing with model: `{hf_model}`")
+            
             response = client.text_generation(
                 "Hello",
                 model=hf_model,
@@ -335,8 +365,23 @@ def test_current_config(hf_token, hf_api_url):
             st.success("✅ **Your configuration WORKS!**")
             st.code(f"Response: {response}")
             
+        except StopIteration as e:
+            st.error("❌ **StopIteration Error**")
+            st.warning("Model returned empty response. Try waiting 30 seconds or use a different model.")
+            st.code(f"Error: {str(e)}")
+            
         except Exception as e:
-            st.error(f"❌ **Error:** {e}")
+            st.error(f"❌ **Error:** {type(e).__name__}")
+            st.code(f"Details: {str(e)}")
+            
+            # Suggest solutions
+            st.markdown("""
+            **Possible solutions:**
+            1. Wait 30 seconds (model loading)
+            2. Try model: `google/flan-t5-small`
+            3. Check token has "Inference" permissions
+            4. Use fallback responses (already in app)
+            """)
         
         return
     

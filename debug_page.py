@@ -293,42 +293,84 @@ def test_inference_client(hf_token):
         client = InferenceClient(token=hf_token)
         st.success("✅ Client created successfully")
         
-        st.write(f"🧪 **Attempting text generation with {hf_model}...**")
-        
-        # Try with detailed error catching
+        # METHOD 1: Try text_generation
+        st.write(f"🧪 **Method 1: text_generation() with {hf_model}...**")
         try:
             response = client.text_generation(
-                "Hello, how are you?",
+                "Hello",
                 model=hf_model,
                 max_new_tokens=20,
             )
-            
-            st.success("✅ **SUCCESS! InferenceClient works!**")
+            st.success("✅ **Method 1 SUCCESS!**")
             st.code(f"Response: {response}")
             return True
-            
-        except StopIteration as e:
-            st.error("❌ **StopIteration Error**")
-            st.warning("""
-            **This error means the model returned an empty response.**
-            
-            **Possible causes:**
-            1. Model is still loading (wait 30 sec and retry)
-            2. Model incompatible with text_generation
-            3. Token missing specific permissions
-            
-            **Try:**
-            - Wait 30 seconds and run test again
-            - Try model: "google/flan-t5-small"
-            - Or use fallback responses (already in app)
-            """)
-            st.code(f"Full error: {str(e)}")
-            return False
-            
+        except StopIteration:
+            st.warning("⚠️ Method 1: StopIteration (empty response)")
         except Exception as e:
-            st.error(f"❌ **Error during generation:** {type(e).__name__}")
-            st.code(f"Details: {str(e)}")
-            return False
+            st.warning(f"⚠️ Method 1 failed: {type(e).__name__}: {str(e)}")
+        
+        # METHOD 2: Try with stream=True
+        st.write(f"🧪 **Method 2: text_generation() with stream=True...**")
+        try:
+            response_parts = []
+            for token in client.text_generation(
+                "Hello",
+                model=hf_model,
+                max_new_tokens=20,
+                stream=True,
+            ):
+                response_parts.append(token)
+            
+            response = "".join(response_parts)
+            if response:
+                st.success("✅ **Method 2 SUCCESS!**")
+                st.code(f"Response: {response}")
+                return True
+            else:
+                st.warning("⚠️ Method 2: Empty response")
+        except Exception as e:
+            st.warning(f"⚠️ Method 2 failed: {type(e).__name__}: {str(e)}")
+        
+        # METHOD 3: Try post() method directly
+        st.write(f"🧪 **Method 3: post() method...**")
+        try:
+            response = client.post(
+                json={"inputs": "Hello"},
+                model=hf_model,
+            )
+            st.success("✅ **Method 3 SUCCESS!**")
+            st.json(response)
+            return True
+        except Exception as e:
+            st.warning(f"⚠️ Method 3 failed: {type(e).__name__}: {str(e)}")
+        
+        # METHOD 4: Try different model type (flan-t5)
+        if "gpt" in hf_model.lower():
+            st.write(f"🧪 **Method 4: Try with flan-t5-small instead...**")
+            try:
+                response = client.text_generation(
+                    "Translate to French: Hello",
+                    model="google/flan-t5-small",
+                    max_new_tokens=20,
+                )
+                st.success("✅ **Method 4 SUCCESS with flan-t5!**")
+                st.code(f"Response: {response}")
+                st.info("💡 Consider switching to flan-t5-small in your secrets")
+                return True
+            except Exception as e:
+                st.warning(f"⚠️ Method 4 failed: {type(e).__name__}: {str(e)}")
+        
+        st.error("❌ **All methods failed**")
+        st.warning("""
+        **This suggests HuggingFace's free Serverless Inference API may not be working.**
+        
+        **Options:**
+        1. Use fallback responses (already in your app)
+        2. Try again in a few hours (API might be having issues)
+        3. Use paid Inference Endpoints
+        4. Switch to different LLM provider (OpenAI, Anthropic)
+        """)
+        return False
         
     except Exception as e:
         st.error(f"❌ **Error:** {e}")

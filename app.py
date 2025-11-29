@@ -16,57 +16,23 @@ import time
 from vero_engine import run_vero_pipeline
 
 # ══════════════════════════════════════════════════════════════════════════
-# HUGGING FACE INTEGRATION - LOCAL MODEL LOADING
+# HUGGING FACE INTEGRATION - UPDATED FOR NEW API
 # ══════════════════════════════════════════════════════════════════════════
 
-@st.cache_resource
-def load_llm_model():
+def query_huggingface_llm(user_query, canonical_context, max_retries=2):
     """
-    Load the LLM model once and cache it.
-    Uses model from secrets.toml
-    """
-    try:
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-        import torch
-        
-        # Get model from secrets
-        model_id = st.secrets["huggingface"]["model"]
-        
-        print(f"Loading model: {model_id} ...")
-        
-        # Load tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        
-        # Use GPU if available (usually not on Streamlit Cloud)
-        device = 0 if torch.cuda.is_available() else -1
-        
-        # Create pipeline
-        text_gen = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            device=device,
-        )
-        
-        return text_gen, True
-        
-    except Exception as e:
-        print(f"Failed to load model: {e}")
-        return None, False
-
-
-def query_huggingface_llm(user_query, canonical_context, max_retries=1):
-    """
-    Query local HuggingFace model with canonical data context.
-    Uses transformers pipeline instead of API calls.
+    Query Hugging Face using InferenceClient (new API).
+    No need for api_url - InferenceClient handles routing automatically.
     """
     try:
-        # Load model (cached)
-        text_gen, model_loaded = load_llm_model()
+        from huggingface_hub import InferenceClient
         
-        if not model_loaded or text_gen is None:
-            return "⚠️ **Model not available.** Using fallback response...\n\n" + get_fallback_response(user_query)
+        # Get credentials from secrets
+        HF_TOKEN = st.secrets["huggingface"]["token"]
+        MODEL = st.secrets["huggingface"]["model"]
+        
+        # Create client (handles routing automatically)
+        client = InferenceClient(token=HF_TOKEN)
         
         # Build prompt with strict data-grounding instructions
         prompt = f"""You are a crop data analyst. Answer using ONLY the data below.
@@ -78,30 +44,36 @@ QUESTION: {user_query}
 
 ANSWER:"""
         
-        # Generate response
-        outputs = text_gen(
-            prompt,
-            max_length=300,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.7,
-            num_return_sequences=1,
-        )
+        # Query with retry logic
+        for attempt in range(max_retries):
+            try:
+                response = client.text_generation(
+                    prompt,
+                    model=MODEL,
+                    max_new_tokens=400,
+                    temperature=0.2,
+                    top_p=0.85,
+                    repetition_penalty=1.2,
+                )
+                
+                if response and len(response.strip()) > 10:
+                    return response.strip()
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                else:
+                    return f"⚠️ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
         
-        # Extract generated text
-        generated_text = outputs[0]["generated_text"]
+        return get_fallback_response(user_query)
         
-        # Remove the prompt from response
-        answer = generated_text.replace(prompt, "").strip()
-        
-        # Verify response has content
-        if answer and len(answer) > 10:
-            return answer
-        else:
-            return get_fallback_response(user_query)
-            
+    except ImportError:
+        return "❌ **Error:** huggingface_hub library not installed. Using fallback response...\n\n" + get_fallback_response(user_query)
+    except KeyError:
+        return "❌ **Configuration Error:** Hugging Face credentials not found in secrets"
     except Exception as e:
-        return f"⚠️ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
+        return f"❌ **Error:** {str(e)}\n\nUsing fallback response...\n\n" + get_fallback_response(user_query)
 
 
 def build_canonical_context(user_query):
@@ -221,15 +193,16 @@ def get_fallback_response(user_query):
 - 1,420 farmers engaged (95%)"""
 
 
-def generate_llm_story(canonical_data_summary, max_retries=1):
-    """Generate value chain story using local HuggingFace model"""
+def generate_llm_story(canonical_data_summary, max_retries=2):
+    """Generate value chain story using Hugging Face InferenceClient"""
     
     try:
-        # Load model (cached)
-        text_gen, model_loaded = load_llm_model()
+        from huggingface_hub import InferenceClient
         
-        if not model_loaded or text_gen is None:
-            return None
+        HF_TOKEN = st.secrets["huggingface"]["token"]
+        MODEL = st.secrets["huggingface"]["model"]
+        
+        client = InferenceClient(token=HF_TOKEN)
         
         prompt = f"""Write a narrative story about crop production using this data:
 
@@ -237,27 +210,32 @@ def generate_llm_story(canonical_data_summary, max_retries=1):
 
 Create an engaging story with chapters about the challenge, performance, and path forward:"""
 
-        # Generate story
-        outputs = text_gen(
-            prompt,
-            max_length=800,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.8,
-            num_return_sequences=1,
-        )
-        
-        generated_text = outputs[0]["generated_text"]
-        story = generated_text.replace(prompt, "").strip()
-        
-        if story and len(story) > 100:
-            return story
-        else:
-            return None
-            
+        for attempt in range(max_retries):
+            try:
+                story = client.text_generation(
+                    prompt,
+                    model=MODEL,
+                    max_new_tokens=800,
+                    temperature=0.7,
+                    top_p=0.9,
+                    repetition_penalty=1.3,
+                )
+                
+                if story and len(story) > 100:
+                    return story.strip()
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                else:
+                    return None
+                    
     except Exception as e:
         print(f"Story generation error: {e}")
         return None
+    
+    return None
 
 st.set_page_config(
     page_title="VERO - Entity Resolution",

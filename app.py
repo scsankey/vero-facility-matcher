@@ -34,18 +34,8 @@ def query_google_gemini(user_query, canonical_context, max_retries=2):
         # Configure Gemini
         genai.configure(api_key=GOOGLE_API_KEY)
         
-        # Safety settings - simple format that works
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        
-        model = genai.GenerativeModel(
-            MODEL_NAME,
-            safety_settings=safety_settings
-        )
+        # Create model without safety restrictions for data analysis
+        model = genai.GenerativeModel(MODEL_NAME)
         
         # Build prompt with strict data-grounding instructions
         prompt = f"""You are a crop data analyst. Answer using ONLY the data below.
@@ -763,18 +753,8 @@ def generate_llm_story(canonical_data_summary, max_retries=2):
         
         genai.configure(api_key=GOOGLE_API_KEY)
         
-        # Safety settings - simple format
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        
-        model = genai.GenerativeModel(
-            MODEL_NAME,
-            safety_settings=safety_settings
-        )
+        # Create model without safety restrictions for data analysis
+        model = genai.GenerativeModel(MODEL_NAME)
         
         prompt = f"""Write a narrative story about crop production using this data:
 

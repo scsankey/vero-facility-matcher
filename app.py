@@ -34,12 +34,14 @@ def query_google_gemini(user_query, canonical_context, max_retries=2):
         # Configure Gemini
         genai.configure(api_key=GOOGLE_API_KEY)
         
-        # Safety settings - allow most content for data analysis
+        # Safety settings - allow data analysis queries
+        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+        
         safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
         
         model = genai.GenerativeModel(
@@ -738,11 +740,13 @@ def generate_llm_story(canonical_data_summary, max_retries=2):
         genai.configure(api_key=GOOGLE_API_KEY)
         
         # Safety settings
+        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+        
         safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
         
         model = genai.GenerativeModel(
@@ -1736,12 +1740,7 @@ if st.session_state.results:
                     })
             
             st.info("""
-            ✨ **Powered by Hugging Face LLM (Mistral-7B-Instruct):**
-            - 🤖 Real AI responses grounded in canonical data only
-            - ✅ Corrects spelling errors automatically
-            - 🚫 Zero hallucinations - refuses to answer without data
-            - 🔄 Fallback to curated responses if API unavailable
-            - 🎯 Optimized for factual, data-driven answers
+            Powered by Google Gemini 2.5 Flash. Responses grounded in Canonical data.
             """)
         
         # ══════════════════════════════════════════════════════════════════

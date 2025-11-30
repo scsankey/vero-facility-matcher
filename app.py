@@ -34,15 +34,13 @@ def query_google_gemini(user_query, canonical_context, max_retries=2):
         # Configure Gemini
         genai.configure(api_key=GOOGLE_API_KEY)
         
-        # Safety settings - allow data analysis queries
-        from google.generativeai.types import HarmCategory, HarmBlockThreshold
-        
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
+        # Safety settings - simple format that works
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
         
         model = genai.GenerativeModel(
             MODEL_NAME,
@@ -72,28 +70,54 @@ ANSWER (be concise and specific):"""
                     }
                 )
                 
-                # Check if response was blocked
-                if response.prompt_feedback.block_reason:
-                    return f"⚠️ Response was blocked by safety filters. Using fallback...\n\n{get_fallback_response(user_query)}"
+                # DEBUG: Log response structure (remove after testing)
+                import sys
+                print(f"DEBUG - Response type: {type(response)}", file=sys.stderr)
+                print(f"DEBUG - Has text attr: {hasattr(response, 'text')}", file=sys.stderr)
+                if hasattr(response, 'prompt_feedback'):
+                    print(f"DEBUG - Prompt feedback: {response.prompt_feedback}", file=sys.stderr)
+                if hasattr(response, 'candidates'):
+                    print(f"DEBUG - Candidates count: {len(response.candidates) if response.candidates else 0}", file=sys.stderr)
+                    if response.candidates and len(response.candidates) > 0:
+                        print(f"DEBUG - First candidate finish_reason: {response.candidates[0].finish_reason if hasattr(response.candidates[0], 'finish_reason') else 'N/A'}", file=sys.stderr)
                 
-                # Check for valid response
+                # Check if response was blocked by prompt feedback
+                if hasattr(response, 'prompt_feedback') and hasattr(response.prompt_feedback, 'block_reason'):
+                    if response.prompt_feedback.block_reason:
+                        print(f"DEBUG - Blocked by prompt_feedback: {response.prompt_feedback.block_reason}", file=sys.stderr)
+                        return f"⚠️ Response was blocked by safety filters (prompt). Using fallback...\n\n{get_fallback_response(user_query)}"
+                
+                # Check if response was blocked by candidate safety ratings
+                if hasattr(response, 'candidates') and response.candidates and len(response.candidates) > 0:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, 'finish_reason'):
+                        # finish_reason values: 1=STOP (normal), 2=MAX_TOKENS, 3=SAFETY, 4=RECITATION, 5=OTHER
+                        if candidate.finish_reason == 3:  # SAFETY
+                            print(f"DEBUG - Blocked by candidate safety: finish_reason=3", file=sys.stderr)
+                            return f"⚠️ Response blocked by safety filters (candidate). Using fallback...\n\n{get_fallback_response(user_query)}"
+                
+                # Try to get response text
                 if hasattr(response, 'text') and response.text and len(response.text.strip()) > 10:
+                    print(f"DEBUG - Got response.text", file=sys.stderr)
                     return response.text.strip()
                 elif response.candidates and len(response.candidates) > 0:
                     candidate = response.candidates[0]
                     if candidate.content and candidate.content.parts:
                         text = candidate.content.parts[0].text
                         if text and len(text.strip()) > 10:
+                            print(f"DEBUG - Got candidate.content.parts[0].text", file=sys.stderr)
                             return text.strip()
                 
                 # If no valid text, use fallback
+                print(f"DEBUG - No valid text found, using fallback", file=sys.stderr)
                 return get_fallback_response(user_query)
                     
             except Exception as e:
                 error_msg = str(e)
+                print(f"DEBUG - Exception caught: {error_msg}", file=sys.stderr)
                 # Check for safety block
-                if "finish_reason" in error_msg or "SAFETY" in error_msg:
-                    return f"⚠️ Response blocked by safety filters.\n\nUsing fallback response...\n\n{get_fallback_response(user_query)}"
+                if "finish_reason" in error_msg or "SAFETY" in error_msg or "block" in error_msg.lower():
+                    return f"⚠️ Response blocked by safety filters (exception).\n\nUsing fallback response...\n\n{get_fallback_response(user_query)}"
                 
                 if attempt < max_retries - 1:
                     time.sleep(2)
@@ -739,15 +763,13 @@ def generate_llm_story(canonical_data_summary, max_retries=2):
         
         genai.configure(api_key=GOOGLE_API_KEY)
         
-        # Safety settings
-        from google.generativeai.types import HarmCategory, HarmBlockThreshold
-        
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
+        # Safety settings - simple format
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
         
         model = genai.GenerativeModel(
             MODEL_NAME,
